@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "556941967707",
+    "project_id": "truesplit-933dc",
+    "storage_bucket": "truesplit-933dc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:556941967707:android:f65a8f64bc29bb2015da7e",
+        "android_client_info": {
+          "package_name": "com.example.truesplit"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHfQ1krkXzudUZlOZroe3uDjIOytus29Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

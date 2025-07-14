@@ -31,7 +31,8 @@ data class GroupData(
 @Composable
 fun GroupScreen(
     auth: FirebaseAuth,
-    navToDetails: (String) -> Unit
+    navToDetails: (String) -> Unit,
+    refreshTrigger: Boolean
 ) {
     val db = FirebaseFirestore.getInstance()
     val userEmail = auth.currentUser?.email
@@ -39,20 +40,39 @@ fun GroupScreen(
     var showDialog by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf(listOf<GroupData>()) }
 
-    LaunchedEffect(userEmail) {
+    // New trigger to refresh after group creation
+    var shouldRefresh by remember { mutableStateOf(false) }
+
+    fun fetchGroups() {
         if (!userEmail.isNullOrEmpty()) {
             db.collection("groups")
                 .whereArrayContains("members", userEmail)
-                .addSnapshotListener { snapshot, _ ->
-                    groups = snapshot?.documents?.map {
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    groups = snapshot.documents.map {
                         GroupData(
                             name = it.getString("name") ?: "",
                             color = it.getString("color") ?: "#6CB4C9",
                             id = it.id
                         )
-                    } ?: listOf()
+                    }
                 }
         }
+    }
+
+    LaunchedEffect(refreshTrigger) {
+        fetchGroups()
+    }
+
+    LaunchedEffect(shouldRefresh) {
+        if (shouldRefresh) {
+            fetchGroups()
+            shouldRefresh = false
+        }
+    }
+
+    LaunchedEffect(userEmail) {
+        fetchGroups()
     }
 
     Scaffold(
@@ -196,6 +216,11 @@ fun GroupScreen(
                         "members" to listOf(userEmail)
                     )
                     db.collection("groups").add(group)
+                        .addOnSuccessListener {
+                            // ✅ trigger UI refresh
+                            shouldRefresh = true
+                        }
+                    showDialog = false
                 }
             }
         )
@@ -251,7 +276,6 @@ fun CreateGroupDialog(
                 onClick = {
                     if (groupName.isNotBlank()) {
                         onCreate(groupName.trim(), selectedColor)
-                        onDismiss()
                     }
                 },
                 shape = RoundedCornerShape(15.dp),
@@ -269,4 +293,3 @@ fun CreateGroupDialog(
         containerColor = Color.White
     )
 }
-

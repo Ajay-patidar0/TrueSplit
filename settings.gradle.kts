@@ -16,8 +16,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://sdk-download.airbridge.io/maven")
     }
 }
+
 
 rootProject.name = "TrueSplit"
 include(":app")

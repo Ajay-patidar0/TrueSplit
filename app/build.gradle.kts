@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.example.truesplit"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.truesplit"
@@ -62,6 +62,7 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.navigation.fragment.ktx)
     implementation(libs.androidx.navigation.ui.ktx)
+    implementation(libs.firebase.firestore)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -75,5 +76,8 @@ dependencies {
     implementation (libs.androidx.navigation.compose)
     implementation (libs.play.services.auth)
     implementation(libs.androidx.material3.v120)
+    implementation (libs.androidx.material.icons.extended)
+    implementation("io.airbridge:sdk-android:4.6.0")
+
 
 }

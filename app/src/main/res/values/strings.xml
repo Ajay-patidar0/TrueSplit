@@ -4,6 +4,8 @@
     <string name="first_fragment_label">First Fragment</string>
     <string name="second_fragment_label">Second Fragment</string>
     <string name="next">Next</string>
+    <string name="APP_SDK_TOKEN">af07f4cfd4b64bd3b723baf8c85174a2</string>
+    <string name="default_web_client_id">556941967707-7fvn0tbf6c3guvmaqoutdvnpto7n59de.apps.googleusercontent.com</string>
     <string name="previous">Previous</string>
     <string name="lorem_ipsum">
         Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam in scelerisque sem. Mauris

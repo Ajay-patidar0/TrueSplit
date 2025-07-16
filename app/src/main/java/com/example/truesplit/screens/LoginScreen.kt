@@ -44,7 +44,9 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
             auth.signInWithCredential(credential).addOnCompleteListener {
                 if (it.isSuccessful) {
-                    navController.navigate("groups") { popUpTo("login") { inclusive = true } }
+                    navController.navigate("profileSetup") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -118,7 +120,7 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
                             .addOnCompleteListener { task ->
                                 isLoading = false
                                 if (task.isSuccessful) {
-                                    navController.navigate("groups") {
+                                    navController.navigate("profileSetup") {
                                         popUpTo("login") { inclusive = true }
                                     }
                                 } else {

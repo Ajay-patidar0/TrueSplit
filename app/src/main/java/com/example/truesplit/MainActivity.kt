@@ -28,6 +28,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
 
@@ -44,23 +45,35 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface {
                     val navController = rememberNavController()
-                    val currentUser = auth.currentUser
                     val snackbarHostState = remember { SnackbarHostState() }
                     val coroutineScope = rememberCoroutineScope()
 
-                    // Group Join Dialog and Navigation States
+                    // State management for group join
                     var showJoinDialog by remember { mutableStateOf(false) }
                     var groupName by remember { mutableStateOf("this group") }
                     var groupIdToJoin by remember { mutableStateOf<String?>(null) }
                     var joinedSuccessfully by remember { mutableStateOf(false) }
                     var hasHandledDeepLink by remember { mutableStateOf(false) }
 
-                    // Handle deep links and intent only once
+                    // Detect if user profile is setup
+                    var isProfileLoaded by remember { mutableStateOf(false) }
+                    var profileComplete by remember { mutableStateOf(false) }
+
+                    // Load user profile if logged in
+                    LaunchedEffect(auth.currentUser) {
+                        val user = auth.currentUser
+                        if (user != null) {
+                            val doc = db.collection("users").document(user.uid).get().await()
+                            profileComplete = doc.exists() && doc.getString("name") != null
+                        }
+                        isProfileLoaded = true
+                    }
+
+                    // Handle deep links
                     LaunchedEffect(Unit) {
                         if (!hasHandledDeepLink) {
                             hasHandledDeepLink = true
 
-                            // Handle Airbridge deep link
                             Airbridge.handleDeeplink(intent) { uri: Uri? ->
                                 uri?.let {
                                     val groupId = it.getQueryParameter("groupId")
@@ -73,7 +86,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // Fallback intent (external share)
                             val intentGroupId = intent.getStringExtra("groupId")
                             val intentGroupName = intent.getStringExtra("groupName") ?: "this group"
                             if (!intentGroupId.isNullOrEmpty()) {
@@ -84,55 +96,71 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Navigation Graph
-                    NavHost(
-                        navController = navController,
-                        startDestination = if (currentUser == null) "login" else "groups"
-                    ) {
-                        composable("login") {
-                            LoginScreen(navController, auth)
-                        }
-                        composable("signup") {
-                            SignupScreen(navController, auth)
-                        }
-                        composable("groups") {
-                            GroupScreen(
-                                auth = auth,
-                                navToDetails = { groupId ->
-                                    navController.navigate("groupDetail/$groupId")
-                                },
-                                refreshTrigger = joinedSuccessfully.also { joinedSuccessfully = false }
-                            )
-                        }
-                        composable(
-                            "groupDetail/{groupId}",
-                            arguments = listOf(navArgument("groupId") { type = NavType.StringType }),
-                            deepLinks = listOf(
-                                navDeepLink { uriPattern = "https://truesplit.page.link/join?groupId={groupId}" },
-                                navDeepLink { uriPattern = "truesplit://join?groupId={groupId}" }
-                            )
-                        ) { backStackEntry ->
-                            val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
-                            GroupDetailScreen(groupId = groupId) {
-                                navController.popBackStack()
+                    // Navigation graph
+                    if (isProfileLoaded) {
+                        NavHost(
+                            navController = navController,
+                            startDestination = when {
+                                auth.currentUser == null -> "login"
+                                !profileComplete -> "profileSetup"
+                                else -> "groups"
+                            }
+                        ) {
+                            composable("login") {
+                                LoginScreen(navController, auth)
+                            }
+                            composable("signup") {
+                                SignupScreen(navController, auth)
+                            }
+                            composable("profileSetup") {
+                                ProfileSetupScreen(
+                                    navToHome = {
+                                        navController.navigate("groups") {
+                                            popUpTo("profileSetup") { inclusive = true }
+                                        }
+                                    },
+                                    auth = auth
+                                )
+                            }
+                            composable("groups") {
+                                GroupScreen(
+                                    auth = auth,
+                                    navToDetails = { groupId ->
+                                        navController.navigate("groupDetail/$groupId")
+                                    },
+                                    refreshTrigger = joinedSuccessfully.also { joinedSuccessfully = false }
+                                )
+                            }
+                            composable(
+                                "groupDetail/{groupId}",
+                                arguments = listOf(navArgument("groupId") { type = NavType.StringType }),
+                                deepLinks = listOf(
+                                    navDeepLink { uriPattern = "https://truesplit.page.link/join?groupId={groupId}" },
+                                    navDeepLink { uriPattern = "truesplit://join?groupId={groupId}" }
+                                )
+                            ) { backStackEntry ->
+                                val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                                GroupDetailScreen(groupId = groupId) {
+                                    navController.popBackStack()
+                                }
                             }
                         }
                     }
 
-                    // Snackbar Host
+                    // Snackbar
                     Box(modifier = Modifier.fillMaxSize()) {
                         SnackbarHost(
                             hostState = snackbarHostState,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
 
-                        // Join Group Dialog
+                        // Group Invitation Dialog
                         if (showJoinDialog && groupIdToJoin != null) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.4f)) // Dimmed Background
-                                    .clickable(enabled = false) {} // To prevent clicks passing through
+                                    .background(Color.Black.copy(alpha = 0.4f))
+                                    .clickable(enabled = false) {}
                             )
 
                             Dialog(onDismissRequest = {
@@ -237,118 +265,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        if (showJoinDialog && groupIdToJoin != null) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.4f)) // Dimmed Background
-                                    .clickable(enabled = false) {} // To prevent clicks passing through
-                            )
-
-                            Dialog(onDismissRequest = {
-                                showJoinDialog = false
-                                groupIdToJoin = null
-                            }) {
-                                Card(
-                                    shape = RoundedCornerShape(20.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 24.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .padding(20.dp)
-                                            .fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            text = "Group Invitation",
-                                            style = MaterialTheme.typography.titleLarge.copy(
-                                                color = Color(0xFF2C5A8C),
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Text(
-                                            text = "Do you want to join \"${groupName}\"?",
-                                            style = MaterialTheme.typography.bodyLarge.copy(
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFF3A3A3A)
-                                            ),
-                                            modifier = Modifier.padding(horizontal = 8.dp)
-                                        )
-                                        Spacer(modifier = Modifier.height(24.dp))
-                                        Row(
-                                            horizontalArrangement = Arrangement.SpaceEvenly,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            TextButton(
-                                                onClick = {
-                                                    showJoinDialog = false
-                                                    groupIdToJoin = null
-                                                }
-                                            ) {
-                                                Text(
-                                                    text = "Cancel",
-                                                    color = Color(0xFF2C5A8C),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                            }
-
-                                            Button(
-                                                onClick = {
-                                                    val userEmail = auth.currentUser?.email ?: return@Button
-                                                    val groupId = groupIdToJoin ?: return@Button
-                                                    val groupDoc = db.collection("groups").document(groupId)
-
-                                                    groupDoc.get().addOnSuccessListener { snapshot ->
-                                                        val members = snapshot.get("members") as? List<String> ?: listOf()
-
-                                                        if (!members.contains(userEmail)) {
-                                                            groupDoc.update("members", members + userEmail)
-                                                                .addOnSuccessListener {
-                                                                    showJoinDialog = false
-                                                                    groupIdToJoin = null
-
-                                                                    coroutineScope.launch {
-                                                                        delay(300)
-                                                                        navController.navigate("groupDetail/$groupId")
-                                                                        snackbarHostState.showSnackbar("Successfully joined the group")
-                                                                    }
-
-                                                                    joinedSuccessfully = true
-                                                                }
-                                                        } else {
-                                                            showJoinDialog = false
-                                                            groupIdToJoin = null
-
-                                                            coroutineScope.launch {
-                                                                delay(300)
-                                                                navController.navigate("groupDetail/$groupId")
-                                                                snackbarHostState.showSnackbar("Already a member of this group")
-                                                            }
-                                                        }
-                                                    }.addOnFailureListener {
-                                                        showJoinDialog = false
-                                                        groupIdToJoin = null
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Failed to join group")
-                                                        }
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C)),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("Join", color = Color.White)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-
                     }
                 }
             }

@@ -45,10 +45,8 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
             auth.signInWithCredential(credential).addOnCompleteListener {
                 if (it.isSuccessful) {
-                    auth.currentUser?.reload()?.addOnCompleteListener { reloadTask ->
-                        if (reloadTask.isSuccessful) {
-                            navController.navigate("groups") { popUpTo("signup") { inclusive = true } }
-                        }
+                    navController.navigate("profileSetup") {
+                        popUpTo("signup") { inclusive = true }
                     }
                 }
             }
@@ -134,15 +132,12 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
                         isLoading = true
                         auth.createUserWithEmailAndPassword(email.trim(), password)
                             .addOnCompleteListener { task ->
+                                isLoading = false
                                 if (task.isSuccessful) {
-                                    auth.currentUser?.reload()?.addOnCompleteListener { reloadTask ->
-                                        isLoading = false
-                                        if (reloadTask.isSuccessful) {
-                                            navController.navigate("groups") { popUpTo("signup") { inclusive = true } }
-                                        }
+                                    navController.navigate("profileSetup") {
+                                        popUpTo("signup") { inclusive = true }
                                     }
                                 } else {
-                                    isLoading = false
                                     val exMsg = task.exception?.localizedMessage ?: ""
                                     error = if (exMsg.contains("email address is already in use", true)) {
                                         "This email is already registered. Please login."

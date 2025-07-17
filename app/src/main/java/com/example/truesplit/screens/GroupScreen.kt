@@ -1,9 +1,12 @@
 package com.example.truesplit.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -21,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.example.truesplit.R
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.delay
 
 data class GroupData(
     val name: String = "",
@@ -39,8 +43,6 @@ fun GroupScreen(
 
     var showDialog by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf(listOf<GroupData>()) }
-
-    // New trigger to refresh after group creation
     var shouldRefresh by remember { mutableStateOf(false) }
 
     fun fetchGroups() {
@@ -60,20 +62,14 @@ fun GroupScreen(
         }
     }
 
-    LaunchedEffect(refreshTrigger) {
-        fetchGroups()
-    }
-
+    LaunchedEffect(refreshTrigger) { fetchGroups() }
     LaunchedEffect(shouldRefresh) {
         if (shouldRefresh) {
             fetchGroups()
             shouldRefresh = false
         }
     }
-
-    LaunchedEffect(userEmail) {
-        fetchGroups()
-    }
+    LaunchedEffect(userEmail) { fetchGroups() }
 
     Scaffold(
         topBar = {
@@ -122,6 +118,8 @@ fun GroupScreen(
         containerColor = Color(0xFFF8F9FB)
     ) { padding ->
 
+        val visibleIndices = remember { mutableStateListOf<Int>() }
+
         LazyColumn(
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(LayoutDirection.Ltr),
@@ -153,49 +151,62 @@ fun GroupScreen(
                     }
                 }
             } else {
-                items(groups) { group ->
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        elevation = CardDefaults.cardElevation(6.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clickable { navToDetails(group.id) }
+                itemsIndexed(groups) { index, group ->
+                    val isVisible = remember { mutableStateOf(false) }
+
+                    LaunchedEffect(Unit) {
+                        delay(index * 100L)
+                        isVisible.value = true
+                        visibleIndices.add(index)
+                    }
+
+                    AnimatedVisibility(
+                        visible = isVisible.value,
+                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn()
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        Card(
+                            shape = RoundedCornerShape(20.dp),
+                            elevation = CardDefaults.cardElevation(6.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
                             modifier = Modifier
-                                .padding(16.dp)
-                                .background(Color(0xFFF8F9FB))
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .clickable { navToDetails(group.id) }
                         ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(android.graphics.Color.parseColor(group.color)))
+                                    .padding(16.dp)
+                                    .background(Color(0xFFF8F9FB))
                             ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(android.graphics.Color.parseColor(group.color)))
+                                ) {
+                                    Text(
+                                        text = group.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                                        color = Color.White,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(Modifier.width(16.dp))
                                 Text(
-                                    text = group.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-                                    color = Color.White,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold
+                                    text = group.name,
+                                    fontSize = 18.sp,
+                                    color = Color(0xFF3A3A3A),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_right),
+                                    contentDescription = "Go",
+                                    tint = Color(0xFF7D7D7D),
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
-                            Spacer(Modifier.width(16.dp))
-                            Text(
-                                text = group.name,
-                                fontSize = 18.sp,
-                                color = Color(0xFF3A3A3A),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_right),
-                                contentDescription = "Go",
-                                tint = Color(0xFF7D7D7D),
-                                modifier = Modifier.size(20.dp)
-                            )
                         }
                     }
                 }
@@ -217,7 +228,6 @@ fun GroupScreen(
                     )
                     db.collection("groups").add(group)
                         .addOnSuccessListener {
-                            // ✅ trigger UI refresh
                             shouldRefresh = true
                         }
                     showDialog = false

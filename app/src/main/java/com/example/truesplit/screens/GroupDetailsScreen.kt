@@ -23,14 +23,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavController
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
-
+fun GroupDetailScreen(
+    groupId: String,
+    navController: NavController,
+    navBack: () -> Unit
+) {
     val db = FirebaseFirestore.getInstance()
     val auth = FirebaseAuth.getInstance()
     val userEmail = auth.currentUser?.email ?: ""
@@ -40,7 +44,6 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
     var groupColor by remember { mutableStateOf("#6CB4C9") }
     var members by remember { mutableStateOf(listOf<String>()) }
     var expenses by remember { mutableStateOf(listOf<Map<String, Any>>()) }
-    var showAddExpense by remember { mutableStateOf(false) }
     var showInviteDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -69,12 +72,16 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(android.graphics.Color.parseColor(groupColor)))
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(android.graphics.Color.parseColor(groupColor))
+                )
             )
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddExpense = true },
+                onClick = {
+                    navController.navigate("addExpense/$groupId")
+                },
                 containerColor = Color(0xFF2C5A8C)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add Expense", tint = Color.White)
@@ -104,7 +111,8 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
                 OutlinedButton(
                     onClick = {
                         val encodedGroupName = Uri.encode(groupName)
-                        val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
+                        val inviteLink =
+                            "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
                         val shareIntent = Intent().apply {
                             action = Intent.ACTION_SEND
                             putExtra(
@@ -132,12 +140,17 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(16.dp).horizontalScroll(rememberScrollState())
+                modifier = Modifier
+                    .padding(16.dp)
+                    .horizontalScroll(rememberScrollState())
             ) {
                 members.forEach { member ->
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(android.graphics.Color.parseColor(groupColor)))
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(android.graphics.Color.parseColor(groupColor)))
                     ) {
                         Text(member.firstOrNull()?.uppercase() ?: "?", color = Color.White)
                     }
@@ -148,7 +161,12 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
 
-            Text("Expenses:", color = Color(0xFF3A3A3A), fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp))
+            Text(
+                "Expenses:",
+                color = Color(0xFF3A3A3A),
+                fontSize = 18.sp,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(expenses) { expense ->
@@ -158,31 +176,24 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
         }
     }
 
-    if (showAddExpense) {
-        AddExpenseDialog(onDismiss = { showAddExpense = false }) { desc, amt ->
-            val expense = hashMapOf(
-                "description" to desc,
-                "amount" to amt.toDoubleOrNull(),
-                "paidBy" to userEmail,
-                "splitBetween" to members,
-                "timestamp" to com.google.firebase.Timestamp.now()
-            )
-            db.collection("groups").document(groupId).collection("expenses").add(expense)
-        }
-    }
-
     if (showInviteDialog) {
         InviteMemberDialog(onDismiss = { showInviteDialog = false }) { email ->
-            if (email.isNotBlank() && Patterns.EMAIL_ADDRESS.matcher(email).matches() && !members.contains(email)) {
-
+            if (email.isNotBlank() &&
+                Patterns.EMAIL_ADDRESS.matcher(email).matches() &&
+                !members.contains(email)
+            ) {
                 val encodedGroupName = Uri.encode(groupName)
-                val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
+                val inviteLink =
+                    "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
 
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
                     putExtra(Intent.EXTRA_SUBJECT, "You're invited to join $groupName")
-                    putExtra(Intent.EXTRA_TEXT, "Join your group in TrueSplit using this link:\n$inviteLink")
+                    putExtra(
+                        Intent.EXTRA_TEXT,
+                        "Join your group in TrueSplit using this link:\n$inviteLink"
+                    )
                 }
                 context.startActivity(Intent.createChooser(intent, "Send Invitation"))
             }
@@ -194,43 +205,18 @@ fun GroupDetailScreen(groupId: String, navBack: () -> Unit) {
 fun ExpenseItem(expense: Map<String, Any>) {
     Card(
         shape = RoundedCornerShape(15.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(expense["description"] as? String ?: "Expense", fontWeight = FontWeight.Bold)
+            Text(expense["title"] as? String ?: "Expense", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text("Amount: ₹${expense["amount"]}", color = Color(0xFF3A3A3A))
             Spacer(Modifier.height(2.dp))
             Text("Paid by: ${expense["paidBy"]}", color = Color(0xFF7D7D7D), fontSize = 13.sp)
         }
     }
-}
-
-@Composable
-fun AddExpenseDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
-    var desc by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add Expense") },
-        text = {
-            Column {
-                OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Description") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = amount, onValueChange = { amount = it }, label = { Text("Amount") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                if (desc.isNotBlank() && amount.isNotBlank()) {
-                    onAdd(desc, amount)
-                    onDismiss()
-                }
-            }) { Text("Add") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
 }
 
 @Composable
@@ -241,7 +227,13 @@ fun InviteMemberDialog(onDismiss: () -> Unit, onInvite: (String) -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Invite Member") },
         text = {
-            OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it },
+                label = { Text("Email") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
         },
         confirmButton = {
             Button(onClick = {
@@ -251,6 +243,8 @@ fun InviteMemberDialog(onDismiss: () -> Unit, onInvite: (String) -> Unit) {
                 }
             }) { Text("Invite") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
     )
 }

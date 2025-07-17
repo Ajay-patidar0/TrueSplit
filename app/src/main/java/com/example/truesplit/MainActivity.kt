@@ -48,18 +48,15 @@ class MainActivity : ComponentActivity() {
                     val snackbarHostState = remember { SnackbarHostState() }
                     val coroutineScope = rememberCoroutineScope()
 
-                    // State management for group join
                     var showJoinDialog by remember { mutableStateOf(false) }
                     var groupName by remember { mutableStateOf("this group") }
                     var groupIdToJoin by remember { mutableStateOf<String?>(null) }
                     var joinedSuccessfully by remember { mutableStateOf(false) }
                     var hasHandledDeepLink by remember { mutableStateOf(false) }
 
-                    // Detect if user profile is setup
                     var isProfileLoaded by remember { mutableStateOf(false) }
                     var profileComplete by remember { mutableStateOf(false) }
 
-                    // Load user profile if logged in
                     LaunchedEffect(auth.currentUser) {
                         val user = auth.currentUser
                         if (user != null) {
@@ -69,7 +66,6 @@ class MainActivity : ComponentActivity() {
                         isProfileLoaded = true
                     }
 
-                    // Handle deep links
                     LaunchedEffect(Unit) {
                         if (!hasHandledDeepLink) {
                             hasHandledDeepLink = true
@@ -96,7 +92,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Navigation graph
                     if (isProfileLoaded) {
                         NavHost(
                             navController = navController,
@@ -140,21 +135,57 @@ class MainActivity : ComponentActivity() {
                                 )
                             ) { backStackEntry ->
                                 val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
-                                GroupDetailScreen(groupId = groupId) {
-                                    navController.popBackStack()
+                                GroupDetailScreen(
+                                    groupId = groupId,
+                                    navController = navController,
+                                    navBack = { navController.popBackStack() }
+                                )
+                            }
+
+                            composable(
+                                "addExpense/{groupId}",
+                                arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+                            ) { backStackEntry ->
+                                val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                                var groupMembers by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) }
+                                var isLoading by remember { mutableStateOf(true) }
+
+                                LaunchedEffect(groupId) {
+                                    val snapshot = FirebaseFirestore.getInstance().collection("groups")
+                                        .document(groupId).get().await()
+
+                                    val members = snapshot.get("members") as? List<String> ?: listOf()
+
+                                    groupMembers = members.map { email ->
+                                        Triple(email, email.substringBefore("@"), email)
+                                    }
+
+                                    isLoading = false
+                                }
+
+                                if (!isLoading) {
+                                    AddExpenseScreen(
+                                        groupId = groupId,
+                                        navController = navController,
+                                        groupMembers = groupMembers
+                                    )
+                                } else {
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator()
+                                    }
                                 }
                             }
+
+
                         }
                     }
 
-                    // Snackbar
                     Box(modifier = Modifier.fillMaxSize()) {
                         SnackbarHost(
                             hostState = snackbarHostState,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
 
-                        // Group Invitation Dialog
                         if (showJoinDialog && groupIdToJoin != null) {
                             Box(
                                 modifier = Modifier
@@ -216,15 +247,21 @@ class MainActivity : ComponentActivity() {
 
                                             Button(
                                                 onClick = {
-                                                    val userEmail = auth.currentUser?.email ?: return@Button
+                                                    val user = auth.currentUser ?: return@Button
+                                                    val userId = user.uid
+                                                    val userEmail = user.email ?: return@Button
+                                                    val userName =
+                                                        user.displayName ?: userEmail.substringBefore("@")
                                                     val groupId = groupIdToJoin ?: return@Button
                                                     val groupDoc = db.collection("groups").document(groupId)
 
                                                     groupDoc.get().addOnSuccessListener { snapshot ->
-                                                        val members = snapshot.get("members") as? List<String> ?: listOf()
+                                                        val members =
+                                                            snapshot.get("members") as? List<Map<String, String>> ?: listOf()
 
-                                                        if (!members.contains(userEmail)) {
-                                                            groupDoc.update("members", members + userEmail)
+                                                        if (members.none { it["id"] == userId }) {
+                                                            val newMember = mapOf("id" to userId, "name" to userName)
+                                                            groupDoc.update("members", members + newMember)
                                                                 .addOnSuccessListener {
                                                                     showJoinDialog = false
                                                                     groupIdToJoin = null

@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 fun AddExpenseScreen(
     navController: NavController,
     groupId: String,
-    groupMembers: List<Triple<String, String, String>> // userId, name, email
+    groupMembers: List<Triple<String, String, String>> // (userId, name, email)
 ) {
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
@@ -66,24 +66,29 @@ fun AddExpenseScreen(
         floatingActionButton = {
             FloatingActionButton(onClick = {
                 val totalAmount = amount.toDoubleOrNull() ?: return@FloatingActionButton
+                if (title.isBlank() || selectedMembers.isEmpty()) return@FloatingActionButton
+
                 val participants = selectedMembers.toList()
 
-                val splits = when (splitType) {
+                val splits: Map<String, Double> = when (splitType) {
                     "equal" -> {
                         val perPerson = totalAmount / participants.size
-                        participants.associateWith { perPerson }
+                        participants.associateWith { "%.2f".format(perPerson).toDouble() }
                     }
                     "unequal" -> {
-                        participants.associateWith { id ->
-                            unequalAmounts[id]?.toDoubleOrNull() ?: 0.0
+                        val map = mutableMapOf<String, Double>()
+                        for (id in participants) {
+                            val amt = unequalAmounts[id]?.toDoubleOrNull() ?: 0.0
+                            map[id] = "%.2f".format(amt).toDouble()
                         }
+                        map
                     }
                     else -> emptyMap()
                 }
 
                 val expense = mapOf(
-                    "title" to title,
-                    "amount" to totalAmount,
+                    "title" to title.trim(),
+                    "amount" to "%.2f".format(totalAmount).toDouble(),
                     "paidBy" to paidBy,
                     "splitType" to splitType,
                     "splits" to splits,
@@ -101,9 +106,11 @@ fun AddExpenseScreen(
             }
         }
     ) { padding ->
-        Column(modifier = Modifier
-            .padding(padding)
-            .padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .padding(16.dp)
+        ) {
 
             OutlinedTextField(
                 value = title,

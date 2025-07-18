@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.truesplit.R
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
@@ -39,27 +40,27 @@ fun GroupScreen(
     refreshTrigger: Boolean
 ) {
     val db = FirebaseFirestore.getInstance()
-    val userEmail = auth.currentUser?.email
+    val userId = auth.currentUser?.uid ?: return
+    val userEmail = auth.currentUser?.email ?: return
+    val userName = auth.currentUser?.displayName ?: userEmail.substringBefore("@")
 
     var showDialog by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf(listOf<GroupData>()) }
     var shouldRefresh by remember { mutableStateOf(false) }
 
     fun fetchGroups() {
-        if (!userEmail.isNullOrEmpty()) {
-            db.collection("groups")
-                .whereArrayContains("members", userEmail)
-                .get()
-                .addOnSuccessListener { snapshot ->
-                    groups = snapshot.documents.map {
-                        GroupData(
-                            name = it.getString("name") ?: "",
-                            color = it.getString("color") ?: "#6CB4C9",
-                            id = it.id
-                        )
-                    }
+        db.collection("groups")
+            .whereArrayContains("memberIds", userId)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                groups = snapshot.documents.map {
+                    GroupData(
+                        name = it.getString("name") ?: "",
+                        color = it.getString("color") ?: "#6CB4C9",
+                        id = it.id
+                    )
                 }
-        }
+            }
     }
 
     LaunchedEffect(refreshTrigger) { fetchGroups() }
@@ -69,7 +70,7 @@ fun GroupScreen(
             shouldRefresh = false
         }
     }
-    LaunchedEffect(userEmail) { fetchGroups() }
+    LaunchedEffect(userId) { fetchGroups() }
 
     Scaffold(
         topBar = {
@@ -218,18 +219,19 @@ fun GroupScreen(
         CreateGroupDialog(
             onDismiss = { showDialog = false },
             onCreate = { name, color ->
-                if (!userEmail.isNullOrEmpty()) {
+                if (userId.isNotEmpty()) {
                     val group = hashMapOf(
                         "name" to name,
                         "color" to color,
                         "createdBy" to userEmail,
-                        "timestamp" to com.google.firebase.Timestamp.now(),
-                        "members" to listOf(userEmail)
+                        "timestamp" to Timestamp.now(),
+                        "members" to listOf(
+                            mapOf("id" to userId, "name" to userName)
+                        ),
+                        "memberIds" to listOf(userId)
                     )
                     db.collection("groups").add(group)
-                        .addOnSuccessListener {
-                            shouldRefresh = true
-                        }
+                        .addOnSuccessListener { shouldRefresh = true }
                     showDialog = false
                 }
             }

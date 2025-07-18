@@ -37,12 +37,11 @@ fun GroupDetailScreen(
 ) {
     val db = FirebaseFirestore.getInstance()
     val auth = FirebaseAuth.getInstance()
-    val userEmail = auth.currentUser?.email ?: ""
     val context = LocalContext.current
 
     var groupName by remember { mutableStateOf("") }
     var groupColor by remember { mutableStateOf("#6CB4C9") }
-    var members by remember { mutableStateOf(listOf<String>()) }
+    var members by remember { mutableStateOf(listOf<Map<String, String>>()) }
     var expenses by remember { mutableStateOf(listOf<Map<String, Any>>()) }
     var showInviteDialog by remember { mutableStateOf(false) }
 
@@ -51,7 +50,19 @@ fun GroupDetailScreen(
             snapshot?.let {
                 groupName = it.getString("name") ?: ""
                 groupColor = it.getString("color") ?: "#6CB4C9"
-                members = it.get("members") as? List<String> ?: listOf()
+
+                val rawMembers = it.get("members")
+                members = when (rawMembers) {
+                    is List<*> -> {
+                        if (rawMembers.all { it is Map<*, *> }) {
+                            @Suppress("UNCHECKED_CAST")
+                            rawMembers as List<Map<String, String>>
+                        } else {
+                            listOf()
+                        }
+                    }
+                    else -> listOf()
+                }
             }
         }
 
@@ -145,6 +156,7 @@ fun GroupDetailScreen(
                     .horizontalScroll(rememberScrollState())
             ) {
                 members.forEach { member ->
+                    val displayName = member["name"] ?: member["id"] ?: "?"
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -152,7 +164,7 @@ fun GroupDetailScreen(
                             .clip(CircleShape)
                             .background(Color(android.graphics.Color.parseColor(groupColor)))
                     ) {
-                        Text(member.firstOrNull()?.uppercase() ?: "?", color = Color.White)
+                        Text(displayName.firstOrNull()?.uppercase() ?: "?", color = Color.White)
                     }
                 }
             }
@@ -180,7 +192,7 @@ fun GroupDetailScreen(
         InviteMemberDialog(onDismiss = { showInviteDialog = false }) { email ->
             if (email.isNotBlank() &&
                 Patterns.EMAIL_ADDRESS.matcher(email).matches() &&
-                !members.contains(email)
+                members.none { it["id"] == email }
             ) {
                 val encodedGroupName = Uri.encode(groupName)
                 val inviteLink =

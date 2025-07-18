@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
@@ -37,7 +36,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         FirebaseApp.initializeApp(this)
         auth = FirebaseAuth.getInstance()
 
@@ -151,15 +149,22 @@ class MainActivity : ComponentActivity() {
                                 var isLoading by remember { mutableStateOf(true) }
 
                                 LaunchedEffect(groupId) {
-                                    val snapshot = FirebaseFirestore.getInstance().collection("groups")
-                                        .document(groupId).get().await()
+                                    val snapshot = db.collection("groups").document(groupId).get().await()
+                                    val rawMembers = snapshot.get("members")
 
-                                    val members = snapshot.get("members") as? List<String> ?: listOf()
-
-                                    groupMembers = members.map { email ->
-                                        Triple(email, email.substringBefore("@"), email)
+                                    groupMembers = when (rawMembers) {
+                                        is List<*> -> {
+                                            if (rawMembers.all { it is Map<*, *> }) {
+                                                @Suppress("UNCHECKED_CAST")
+                                                (rawMembers as List<Map<String, String>>).map {
+                                                    Triple(it["id"] ?: "", it["name"] ?: "", it["id"] ?: "")
+                                                }
+                                            } else {
+                                                listOf()
+                                            }
+                                        }
+                                        else -> listOf()
                                     }
-
                                     isLoading = false
                                 }
 
@@ -175,8 +180,6 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-
-
                         }
                     }
 
@@ -250,14 +253,27 @@ class MainActivity : ComponentActivity() {
                                                     val user = auth.currentUser ?: return@Button
                                                     val userId = user.uid
                                                     val userEmail = user.email ?: return@Button
-                                                    val userName =
-                                                        user.displayName ?: userEmail.substringBefore("@")
+                                                    val userName = user.displayName ?: userEmail.substringBefore("@")
                                                     val groupId = groupIdToJoin ?: return@Button
                                                     val groupDoc = db.collection("groups").document(groupId)
 
                                                     groupDoc.get().addOnSuccessListener { snapshot ->
-                                                        val members =
-                                                            snapshot.get("members") as? List<Map<String, String>> ?: listOf()
+                                                        val rawMembers = snapshot.get("members")
+                                                        val members: List<Map<String, String>> = when (rawMembers) {
+                                                            is List<*> -> {
+                                                                if (rawMembers.all { it is Map<*, *> }) {
+                                                                    @Suppress("UNCHECKED_CAST")
+                                                                    rawMembers as List<Map<String, String>>
+                                                                } else if (rawMembers.all { it is String }) {
+                                                                    (rawMembers as List<String>).map {
+                                                                        mapOf("id" to it, "name" to it.substringBefore("@"))
+                                                                    }
+                                                                } else {
+                                                                    listOf()
+                                                                }
+                                                            }
+                                                            else -> listOf()
+                                                        }
 
                                                         if (members.none { it["id"] == userId }) {
                                                             val newMember = mapOf("id" to userId, "name" to userName)

@@ -36,6 +36,8 @@ fun AddExpenseScreen(
     val db = FirebaseFirestore.getInstance()
     val coroutineScope = rememberCoroutineScope()
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
     val currentUserId = auth.currentUser?.uid ?: ""
     val currentUser = groupMembers.find { it.first == currentUserId }
 
@@ -65,8 +67,19 @@ fun AddExpenseScreen(
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
-                val totalAmount = amount.toDoubleOrNull() ?: return@FloatingActionButton
-                if (title.isBlank() || selectedMembers.isEmpty()) return@FloatingActionButton
+                val totalAmount = amount.toDoubleOrNull()
+                if (title.isBlank()) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("Please enter a title.") }
+                    return@FloatingActionButton
+                }
+                if (totalAmount == null || totalAmount <= 0) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("Please enter a valid amount.") }
+                    return@FloatingActionButton
+                }
+                if (selectedMembers.isEmpty()) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("Select at least one member.") }
+                    return@FloatingActionButton
+                }
 
                 val participants = selectedMembers.toList()
 
@@ -77,9 +90,23 @@ fun AddExpenseScreen(
                     }
                     "unequal" -> {
                         val map = mutableMapOf<String, Double>()
+                        var sum = 0.0
                         for (id in participants) {
-                            val amt = unequalAmounts[id]?.toDoubleOrNull() ?: 0.0
+                            val amt = unequalAmounts[id]?.toDoubleOrNull()
+                            if (amt == null || amt < 0) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Enter valid amount for all selected members.")
+                                }
+                                return@FloatingActionButton
+                            }
+                            sum += amt
                             map[id] = "%.2f".format(amt).toDouble()
+                        }
+                        if ("%.2f".format(sum) != "%.2f".format(totalAmount)) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Total unequal split must equal ₹$totalAmount")
+                            }
+                            return@FloatingActionButton
                         }
                         map
                     }
@@ -99,12 +126,20 @@ fun AddExpenseScreen(
                     db.collection("groups").document(groupId)
                         .collection("expenses")
                         .add(expense)
-                        .addOnSuccessListener { navController.popBackStack() }
+                        .addOnSuccessListener {
+                            navController.popBackStack()
+                        }
+                        .addOnFailureListener {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Failed to add expense.")
+                            }
+                        }
                 }
             }) {
                 Icon(Icons.Filled.Check, contentDescription = "Save")
             }
-        }
+        },
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -131,8 +166,6 @@ fun AddExpenseScreen(
             Spacer(Modifier.height(16.dp))
 
             // Paid By Dropdown
-            Text("Paid By", fontWeight = FontWeight.SemiBold)
-
             val paidByDisplayName = if (paidBy == currentUserId) "Me"
             else groupMembers.find { it.first == paidBy }?.second ?: "Select"
 

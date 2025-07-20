@@ -25,6 +25,8 @@ import com.example.truesplit.screens.*
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -139,7 +141,6 @@ class MainActivity : ComponentActivity() {
                                     navBack = { navController.popBackStack() }
                                 )
                             }
-
                             composable(
                                 "addExpense/{groupId}",
                                 arguments = listOf(navArgument("groupId") { type = NavType.StringType })
@@ -151,17 +152,14 @@ class MainActivity : ComponentActivity() {
                                 LaunchedEffect(groupId) {
                                     val snapshot = db.collection("groups").document(groupId).get().await()
                                     val rawMembers = snapshot.get("members")
-
                                     groupMembers = when (rawMembers) {
                                         is List<*> -> {
                                             if (rawMembers.all { it is Map<*, *> }) {
                                                 @Suppress("UNCHECKED_CAST")
                                                 (rawMembers as List<Map<String, String>>).map {
-                                                    Triple(it["id"] ?: "", it["name"] ?: "", it["id"] ?: "")
+                                                    Triple(it["id"] ?: "", it["name"] ?: "", it["email"] ?: "")
                                                 }
-                                            } else {
-                                                listOf()
-                                            }
+                                            } else listOf()
                                         }
                                         else -> listOf()
                                     }
@@ -186,7 +184,9 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         SnackbarHost(
                             hostState = snackbarHostState,
-                            modifier = Modifier.align(Alignment.BottomCenter)
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 16.dp)
                         )
 
                         if (showJoinDialog && groupIdToJoin != null) {
@@ -196,7 +196,6 @@ class MainActivity : ComponentActivity() {
                                     .background(Color.Black.copy(alpha = 0.4f))
                                     .clickable(enabled = false) {}
                             )
-
                             Dialog(onDismissRequest = {
                                 showJoinDialog = false
                                 groupIdToJoin = null
@@ -235,17 +234,11 @@ class MainActivity : ComponentActivity() {
                                             horizontalArrangement = Arrangement.SpaceEvenly,
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            TextButton(
-                                                onClick = {
-                                                    showJoinDialog = false
-                                                    groupIdToJoin = null
-                                                }
-                                            ) {
-                                                Text(
-                                                    text = "Cancel",
-                                                    color = Color(0xFF2C5A8C),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
+                                            TextButton(onClick = {
+                                                showJoinDialog = false
+                                                groupIdToJoin = null
+                                            }) {
+                                                Text("Cancel", color = Color(0xFF2C5A8C))
                                             }
 
                                             Button(
@@ -258,42 +251,36 @@ class MainActivity : ComponentActivity() {
                                                     val groupDoc = db.collection("groups").document(groupId)
 
                                                     groupDoc.get().addOnSuccessListener { snapshot ->
-                                                        val rawMembers = snapshot.get("members")
-                                                        val members: List<Map<String, String>> = when (rawMembers) {
-                                                            is List<*> -> {
-                                                                if (rawMembers.all { it is Map<*, *> }) {
-                                                                    @Suppress("UNCHECKED_CAST")
-                                                                    rawMembers as List<Map<String, String>>
-                                                                } else if (rawMembers.all { it is String }) {
-                                                                    (rawMembers as List<String>).map {
-                                                                        mapOf("id" to it, "name" to it.substringBefore("@"))
-                                                                    }
-                                                                } else {
-                                                                    listOf()
+                                                        val memberList = snapshot.get("members") as? List<Map<String, String>> ?: emptyList()
+                                                        val memberIdList = snapshot.get("memberIds") as? List<String> ?: emptyList()
+
+                                                        val isAlreadyMember = memberIdList.contains(userId)
+
+                                                        if (!isAlreadyMember) {
+                                                            val newMember = mapOf(
+                                                                "id" to userId,
+                                                                "name" to userName,
+                                                                "email" to userEmail
+                                                            )
+
+                                                            groupDoc.update(
+                                                                mapOf(
+                                                                    "members" to memberList + newMember,
+                                                                    "memberIds" to memberIdList + userId
+                                                                )
+                                                            ).addOnSuccessListener {
+                                                                showJoinDialog = false
+                                                                groupIdToJoin = null
+                                                                coroutineScope.launch {
+                                                                    delay(300)
+                                                                    navController.navigate("groupDetail/$groupId")
+                                                                    snackbarHostState.showSnackbar("Successfully joined the group")
                                                                 }
+                                                                joinedSuccessfully = true
                                                             }
-                                                            else -> listOf()
-                                                        }
-
-                                                        if (members.none { it["id"] == userId }) {
-                                                            val newMember = mapOf("id" to userId, "name" to userName)
-                                                            groupDoc.update("members", members + newMember)
-                                                                .addOnSuccessListener {
-                                                                    showJoinDialog = false
-                                                                    groupIdToJoin = null
-
-                                                                    coroutineScope.launch {
-                                                                        delay(300)
-                                                                        navController.navigate("groupDetail/$groupId")
-                                                                        snackbarHostState.showSnackbar("Successfully joined the group")
-                                                                    }
-
-                                                                    joinedSuccessfully = true
-                                                                }
                                                         } else {
                                                             showJoinDialog = false
                                                             groupIdToJoin = null
-
                                                             coroutineScope.launch {
                                                                 delay(300)
                                                                 navController.navigate("groupDetail/$groupId")
@@ -308,8 +295,8 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C)),
-                                                shape = RoundedCornerShape(12.dp)
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C))
                                             ) {
                                                 Text("Join", color = Color.White)
                                             }
@@ -319,8 +306,42 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+
+                    fun updateMembersWithEmails(userId: String) {
+                        val db = FirebaseFirestore.getInstance()
+                        val userDoc = db.collection("users").document(userId)
+
+                        userDoc.get().addOnSuccessListener { userSnapshot ->
+                            val name = userSnapshot.getString("name") ?: return@addOnSuccessListener
+                            val email = userSnapshot.getString("email") ?: return@addOnSuccessListener
+
+                            db.collection("groups").get().addOnSuccessListener { groupSnapshots ->
+                                for (group in groupSnapshots) {
+                                    val members = group.get("members") as? List<Map<String, String>> ?: continue
+                                    val updatedMembers = members.map { member ->
+                                        if (member["id"] == userId && member["email"].isNullOrEmpty()) {
+                                            mapOf(
+                                                "id" to userId,
+                                                "name" to name,
+                                                "email" to email
+                                            )
+                                        } else {
+                                            member
+                                        }
+                                    }
+
+                                    db.collection("groups").document(group.id)
+                                        .update("members", updatedMembers)
+                                }
+                            }
+                        }
+                    }
+
                 }
             }
         }
+
     }
+
+
 }

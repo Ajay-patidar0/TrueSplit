@@ -119,8 +119,6 @@ fun GroupScreen(
         containerColor = Color(0xFFF8F9FB)
     ) { padding ->
 
-        val visibleIndices = remember { mutableStateListOf<Int>() }
-
         LazyColumn(
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(LayoutDirection.Ltr),
@@ -153,16 +151,14 @@ fun GroupScreen(
                 }
             } else {
                 itemsIndexed(groups) { index, group ->
-                    val isVisible = remember { mutableStateOf(false) }
+                    val isVisible by remember { mutableStateOf(true) }
 
-                    LaunchedEffect(Unit) {
+                    LaunchedEffect(index) {
                         delay(index * 100L)
-                        isVisible.value = true
-                        visibleIndices.add(index)
                     }
 
                     AnimatedVisibility(
-                        visible = isVisible.value,
+                        visible = isVisible,
                         enter = slideInVertically(initialOffsetY = { it }) + fadeIn()
                     ) {
                         Card(
@@ -178,7 +174,6 @@ fun GroupScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .padding(16.dp)
-                                    .background(Color(0xFFF8F9FB))
                             ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
@@ -225,12 +220,10 @@ fun GroupScreen(
                         "color" to color,
                         "createdBy" to userEmail,
                         "timestamp" to Timestamp.now(),
-                        "members" to listOf(
-                            mapOf("id" to userId, "name" to userName)
-                        ),
+                        "members" to listOf(mapOf("id" to userId, "name" to userName)),
                         "memberIds" to listOf(userId)
                     )
-                    db.collection("groups").add(group)
+                    FirebaseFirestore.getInstance().collection("groups").add(group)
                         .addOnSuccessListener { shouldRefresh = true }
                     showDialog = false
                 }

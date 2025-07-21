@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -182,7 +183,7 @@ fun GroupDetailScreen(
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(expenses) { expense ->
-                    ExpenseItem(expense)
+                    ExpenseItem(expense, members)
                 }
             }
         }
@@ -214,22 +215,110 @@ fun GroupDetailScreen(
 }
 
 @Composable
-fun ExpenseItem(expense: Map<String, Any>) {
+fun ExpenseItem(
+    expense: Map<String, Any>,
+    members: List<Map<String, String>>
+) {
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: return
+
+    val paidById = expense["paidBy"] as? String ?: ""
+    val paidByMember = members.find { it["id"] == paidById }
+    val paidByName = paidByMember?.get("name") ?: paidById
+    val paidByEmail = paidByMember?.get("email") ?: ""
+
+    val totalAmount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
+    val memberCount = members.size.takeIf { it > 0 } ?: 1
+    val sharePerPerson = totalAmount / memberCount
+
+    val owedSummary = when {
+        currentUserId == paidById -> {
+            // Show who owes you
+            val others = members.filter { it["id"] != currentUserId }
+            if (others.isEmpty()) "" else
+                others.joinToString("\n") {
+                    val name = it["name"] ?: "Unknown"
+                    "🟢 $name owes you ₹${String.format("%.2f", sharePerPerson)}"
+                }
+        }
+
+        members.any { it["id"] == currentUserId } -> {
+            // Show you owe to the payer
+            "🔴 You owe $paidByName ₹${String.format("%.2f", sharePerPerson)}"
+        }
+
+        else -> ""
+    }
+
     Card(
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .border(1.dp, Color(0xFFE0E0E0), shape = RoundedCornerShape(16.dp))
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(expense["title"] as? String ?: "Expense", fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text("Amount: ₹${expense["amount"]}", color = Color(0xFF3A3A3A))
-            Spacer(Modifier.height(2.dp))
-            Text("Paid by: ${expense["paidBy"]}", color = Color(0xFF7D7D7D), fontSize = 13.sp)
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Expense Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = expense["title"] as? String ?: "Untitled",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = Color(0xFF222222)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "₹${String.format("%.2f", totalAmount)} • Paid by $paidByName",
+                        color = Color(0xFF666666),
+                        fontSize = 13.sp
+                    )
+                }
+                if (paidByEmail.isNotBlank()) {
+                    Text(
+                        text = paidByEmail,
+                        color = Color(0xFFAAAAAA),
+                        fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.CenterVertically)
+                    )
+                }
+            }
+
+            if (owedSummary.isNotBlank()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = Color(0xFFF0F0F0))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Owed Summary Card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = if (currentUserId == paidById) Color(0xFFEDF7ED) else Color(0xFFFFF3F3),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = owedSummary,
+                        color = if (currentUserId == paidById) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
         }
     }
 }
+
+
+
+
 
 @Composable
 fun InviteMemberDialog(onDismiss: () -> Unit, onInvite: (String) -> Unit) {

@@ -22,11 +22,14 @@ import androidx.navigation.NavController
 import com.example.truesplit.R
 import com.google.android.gms.auth.api.signin.*
 import com.google.firebase.auth.*
+import com.google.firebase.firestore.FirebaseFirestore
 
 @Composable
 fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
 
     val context = LocalContext.current
+    val db = FirebaseFirestore.getInstance()
+
     val googleSignInClient = remember {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestIdToken(context.getString(R.string.default_web_client_id))
@@ -44,13 +47,23 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
             auth.signInWithCredential(credential).addOnCompleteListener {
                 if (it.isSuccessful) {
-                    navController.navigate("profileSetup") {
-                        popUpTo("login") { inclusive = true }
-                    }
+                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
+                    db.collection("users").document(userId).get()
+                        .addOnSuccessListener { doc ->
+                            if (doc.exists()) {
+                                navController.navigate("home") {
+                                    popUpTo("login") { inclusive = true }
+                                }
+                            } else {
+                                navController.navigate("profileSetup") {
+                                    popUpTo("login") { inclusive = true }
+                                }
+                            }
+                        }
                 }
             }
-        } catch (e: Exception) {
-            // Silent fail to avoid crash
+        } catch (_: Exception) {
+            // Silently ignore
         }
     }
 
@@ -120,12 +133,22 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
                             .addOnCompleteListener { task ->
                                 isLoading = false
                                 if (task.isSuccessful) {
-                                    navController.navigate("profileSetup") {
-                                        popUpTo("login") { inclusive = true }
-                                    }
+                                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
+                                    db.collection("users").document(userId).get()
+                                        .addOnSuccessListener { doc ->
+                                            if (doc.exists()) {
+                                                navController.navigate("home") {
+                                                    popUpTo("login") { inclusive = true }
+                                                }
+                                            } else {
+                                                navController.navigate("profileSetup") {
+                                                    popUpTo("login") { inclusive = true }
+                                                }
+                                            }
+                                        }
                                 } else {
-                                    val exMsg = task.exception?.localizedMessage ?: ""
-                                    error = if (exMsg.contains("no user record", true)) {
+                                    val msg = task.exception?.localizedMessage ?: ""
+                                    error = if (msg.contains("no user record", true)) {
                                         "Email not registered. Please sign up."
                                     } else {
                                         "Incorrect credentials. Please try again."
@@ -145,7 +168,11 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
             ),
             enabled = !isLoading
         ) {
-            Text("Login")
+            if (isLoading) {
+                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+            } else {
+                Text("Login")
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

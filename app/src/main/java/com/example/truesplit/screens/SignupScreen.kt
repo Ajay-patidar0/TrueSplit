@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,11 +25,14 @@ import com.example.truesplit.R
 import com.google.android.gms.auth.api.signin.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.firestore.FirebaseFirestore
 
 @Composable
 fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
 
     val context = LocalContext.current
+    val db = FirebaseFirestore.getInstance()
+
     val googleSignInClient = remember {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestIdToken(context.getString(R.string.default_web_client_id))
@@ -45,13 +50,23 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
             auth.signInWithCredential(credential).addOnCompleteListener {
                 if (it.isSuccessful) {
-                    navController.navigate("profileSetup") {
-                        popUpTo("signup") { inclusive = true }
-                    }
+                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
+                    db.collection("users").document(userId).get()
+                        .addOnSuccessListener { doc ->
+                            if (doc.exists()) {
+                                navController.navigate("home") {
+                                    popUpTo("signup") { inclusive = true }
+                                }
+                            } else {
+                                navController.navigate("profileSetup") {
+                                    popUpTo("signup") { inclusive = true }
+                                }
+                            }
+                        }
                 }
             }
-        } catch (e: Exception) {
-            // Silent fail
+        } catch (_: Exception) {
+            // Ignore silently
         }
     }
 
@@ -68,7 +83,6 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
             .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-
         Spacer(modifier = Modifier.height(20.dp))
 
         Image(
@@ -126,7 +140,7 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
                 when {
                     email.isBlank() -> error = "Please enter your email."
                     !Patterns.EMAIL_ADDRESS.matcher(email).matches() -> error = "Invalid email address."
-                    password.isBlank() || password.length < 8 -> error = "Password must be at least 8 characters."
+                    password.length < 8 -> error = "Password must be at least 8 characters."
                     password != confirmPassword -> error = "Passwords do not match."
                     else -> {
                         isLoading = true
@@ -138,11 +152,11 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
                                         popUpTo("signup") { inclusive = true }
                                     }
                                 } else {
-                                    val exMsg = task.exception?.localizedMessage ?: ""
-                                    error = if (exMsg.contains("email address is already in use", true)) {
+                                    val msg = task.exception?.localizedMessage ?: ""
+                                    error = if (msg.contains("email address is already in use", true)) {
                                         "This email is already registered. Please login."
                                     } else {
-                                        "Sign up failed, please try again."
+                                        "Sign up failed. Please try again."
                                     }
                                 }
                             }
@@ -156,7 +170,11 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C)),
             enabled = !isLoading
         ) {
-            Text("Sign Up", color = Color.White)
+            if (isLoading) {
+                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+            } else {
+                Text("Sign Up", color = Color.White)
+            }
         }
 
         Spacer(modifier = Modifier.height(14.dp))

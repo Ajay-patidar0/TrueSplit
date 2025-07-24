@@ -251,22 +251,26 @@ class MainActivity : ComponentActivity() {
                                                     val groupDoc = db.collection("groups").document(groupId)
 
                                                     groupDoc.get().addOnSuccessListener { snapshot ->
-                                                        val memberList = snapshot.get("members") as? List<Map<String, String>> ?: emptyList()
-                                                        val memberIdList = snapshot.get("memberIds") as? List<String> ?: emptyList()
+                                                        val currentMembers = snapshot.get("members") as? List<Map<String, String>> ?: emptyList()
+                                                        val currentIds = snapshot.get("memberIds") as? List<String> ?: emptyList()
 
-                                                        val isAlreadyMember = memberIdList.contains(userId)
+                                                        val alreadyMember = currentIds.contains(userId) ||
+                                                                currentMembers.any { it["id"] == userId }
 
-                                                        if (!isAlreadyMember) {
+                                                        if (!alreadyMember) {
                                                             val newMember = mapOf(
                                                                 "id" to userId,
                                                                 "name" to userName,
                                                                 "email" to userEmail
                                                             )
 
+                                                            val updatedMembers = currentMembers + newMember
+                                                            val updatedIds = currentIds + userId
+
                                                             groupDoc.update(
                                                                 mapOf(
-                                                                    "members" to memberList + newMember,
-                                                                    "memberIds" to memberIdList + userId
+                                                                    "members" to updatedMembers,
+                                                                    "memberIds" to updatedIds
                                                                 )
                                                             ).addOnSuccessListener {
                                                                 showJoinDialog = false
@@ -300,6 +304,7 @@ class MainActivity : ComponentActivity() {
                                             ) {
                                                 Text("Join", color = Color.White)
                                             }
+
                                         }
                                     }
                                 }

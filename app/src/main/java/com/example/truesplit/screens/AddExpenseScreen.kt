@@ -30,12 +30,11 @@ import kotlinx.coroutines.launch
 fun AddExpenseScreen(
     navController: NavController,
     groupId: String,
-    groupMembers: List<Triple<String, String, String>> // (userId, name, email)
+    groupMembers: List<Triple<String, String, String>>
 ) {
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
     val coroutineScope = rememberCoroutineScope()
-
     val snackbarHostState = remember { SnackbarHostState() }
 
     val currentUserId = auth.currentUser?.uid ?: ""
@@ -99,12 +98,14 @@ fun AddExpenseScreen(
                                 }
                                 return@FloatingActionButton
                             }
+                            map[id] = amt
                             sum += amt
-                            map[id] = "%.2f".format(amt).toDouble()
                         }
-                        if ("%.2f".format(sum) != "%.2f".format(totalAmount)) {
+                        val formattedSum = "%.2f".format(sum).toDouble()
+                        val formattedTotal = "%.2f".format(totalAmount).toDouble()
+                        if (formattedSum != formattedTotal) {
                             coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Total unequal split must equal ₹$totalAmount")
+                                snackbarHostState.showSnackbar("Total unequal split must equal ₹$formattedTotal")
                             }
                             return@FloatingActionButton
                         }
@@ -165,7 +166,6 @@ fun AddExpenseScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            // Paid By Dropdown
             val paidByDisplayName = if (paidBy == currentUserId) "Me"
             else groupMembers.find { it.first == paidBy }?.second ?: "Select"
 
@@ -212,7 +212,6 @@ fun AddExpenseScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            // Split Type
             Text("Split Type", fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(
@@ -230,7 +229,6 @@ fun AddExpenseScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            // Members List
             Text("Select Members Involved", fontWeight = FontWeight.SemiBold)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(groupMembers) { (id, name, email) ->

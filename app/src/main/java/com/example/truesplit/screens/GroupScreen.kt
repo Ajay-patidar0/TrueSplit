@@ -30,7 +30,9 @@ import kotlinx.coroutines.delay
 data class GroupData(
     val name: String = "",
     val color: String = "#6CB4C9",
-    val id: String = ""
+    val id: String = "",
+    val youOwe: Double = 0.0,
+    val youLend: Double = 0.0
 )
 
 @Composable
@@ -42,7 +44,8 @@ fun GroupScreen(
     val db = FirebaseFirestore.getInstance()
     val userId = auth.currentUser?.uid ?: return
     val userEmail = auth.currentUser?.email ?: return
-    val userName = auth.currentUser?.displayName ?: userEmail.substringBefore("@")
+    val userName = auth.currentUser?.displayName?.takeIf { it.isNotBlank() }
+        ?: userEmail.substringBefore("@")
 
     var showDialog by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf(listOf<GroupData>()) }
@@ -53,12 +56,36 @@ fun GroupScreen(
             .whereArrayContains("memberIds", userId)
             .get()
             .addOnSuccessListener { snapshot ->
-                groups = snapshot.documents.map {
-                    GroupData(
-                        name = it.getString("name") ?: "",
-                        color = it.getString("color") ?: "#6CB4C9",
-                        id = it.id
-                    )
+                val fetchedGroups = mutableListOf<GroupData>()
+                snapshot.documents.forEach { doc ->
+                    val groupId = doc.id
+                    val name = doc.getString("name") ?: ""
+                    val color = doc.getString("color") ?: "#6CB4C9"
+
+                    db.collection("groups").document(groupId).collection("expenses")
+                        .get()
+                        .addOnSuccessListener { expenseSnapshot ->
+                            var youOwe = 0.0
+                            var youLend = 0.0
+
+                            for (expenseDoc in expenseSnapshot.documents) {
+                                val paidBy = expenseDoc.getString("paidBy") ?: continue
+                                val splits = expenseDoc.get("splits") as? Map<String, Any> ?: continue
+                                val totalAmount = expenseDoc.getDouble("amount") ?: 0.0
+                                val yourShare = splits[userId]?.toString()?.toDoubleOrNull() ?: 0.0
+
+                                if (paidBy == userId) {
+                                    youLend += (totalAmount - yourShare)
+                                } else {
+                                    youOwe += yourShare
+                                }
+                            }
+
+                            fetchedGroups.add(
+                                GroupData(name, color, groupId, youOwe, youLend)
+                            )
+                            groups = fetchedGroups.sortedBy { it.name }
+                        }
                 }
             }
     }
@@ -172,8 +199,7 @@ fun GroupScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .padding(16.dp)
+                                modifier = Modifier.padding(16.dp)
                             ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
@@ -189,13 +215,35 @@ fun GroupScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
+
                                 Spacer(Modifier.width(16.dp))
-                                Text(
-                                    text = group.name,
-                                    fontSize = 18.sp,
-                                    color = Color(0xFF3A3A3A),
-                                    modifier = Modifier.weight(1f)
-                                )
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = group.name,
+                                        fontSize = 18.sp,
+                                        color = Color(0xFF3A3A3A),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Row {
+                                        if (group.youOwe > 0.0) {
+                                            Text(
+                                                text = "You owe ₹%.2f".format(group.youOwe),
+                                                fontSize = 13.sp,
+                                                color = Color(0xFFEA4335),
+                                                modifier = Modifier.padding(end = 8.dp)
+                                            )
+                                        }
+                                        if (group.youLend > 0.0) {
+                                            Text(
+                                                text = "You lent ₹%.2f".format(group.youLend),
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF34A853)
+                                            )
+                                        }
+                                    }
+                                }
+
                                 Icon(
                                     painter = painterResource(id = R.drawable.ic_right),
                                     contentDescription = "Go",
@@ -220,10 +268,16 @@ fun GroupScreen(
                         "color" to color,
                         "createdBy" to userEmail,
                         "timestamp" to Timestamp.now(),
-                        "members" to listOf(mapOf("id" to userId, "name" to userName)),
+                        "members" to listOf(
+                            mapOf(
+                                "id" to userId,
+                                "name" to userName,
+                                "email" to userEmail
+                            )
+                        ),
                         "memberIds" to listOf(userId)
                     )
-                    FirebaseFirestore.getInstance().collection("groups").add(group)
+                    db.collection("groups").add(group)
                         .addOnSuccessListener { shouldRefresh = true }
                     showDialog = false
                 }

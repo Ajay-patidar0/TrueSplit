@@ -3,60 +3,27 @@ package com.example.truesplit.screens
 import android.content.Intent
 import android.net.Uri
 import android.util.Patterns
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Restaurant
 import androidx.compose.material.icons.outlined.ShoppingCart
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,17 +49,24 @@ fun GroupDetailScreen(
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
 
+    val currentUser = auth.currentUser
+    val currentUserId = currentUser?.uid ?: return
+    val currentUserEmail = currentUser.email ?: ""
+
     var groupName by remember { mutableStateOf("") }
     var groupColor by remember { mutableStateOf("#6CB4C9") }
     var members by remember { mutableStateOf(listOf<Map<String, String>>()) }
     var expenses by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+    var createdBy by remember { mutableStateOf("") }
     var showInviteDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         db.collection("groups").document(groupId).addSnapshotListener { snapshot, _ ->
             snapshot?.let {
                 groupName = it.getString("name") ?: ""
                 groupColor = it.getString("color") ?: "#6CB4C9"
+                createdBy = it.getString("createdBy") ?: ""
 
                 val rawMembers = it.get("members")
                 members = when (rawMembers) {
@@ -126,6 +100,17 @@ fun GroupDetailScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
+                actions = {
+                    if (currentUserEmail == createdBy && expenses.isEmpty()) {
+                        IconButton(onClick = { showDeleteConfirm = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Group",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(android.graphics.Color.parseColor(groupColor))
                 )
@@ -145,9 +130,7 @@ fun GroupDetailScreen(
     ) { padding ->
 
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-
             Spacer(Modifier.height(12.dp))
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -213,7 +196,6 @@ fun GroupDetailScreen(
             }
 
             Divider()
-
             Spacer(Modifier.height(8.dp))
 
             Text(
@@ -229,6 +211,35 @@ fun GroupDetailScreen(
                 }
             }
         }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Group") },
+            text = { Text("Are you sure you want to delete this group? This action cannot be undone.") },
+            confirmButton = {
+                Button(onClick = {
+                    db.collection("groups").document(groupId)
+                        .delete()
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Group deleted", Toast.LENGTH_SHORT).show()
+                            navBack()
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(context, "Failed to delete group", Toast.LENGTH_SHORT).show()
+                        }
+                    showDeleteConfirm = false
+                }) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showInviteDialog) {
@@ -255,6 +266,7 @@ fun GroupDetailScreen(
         }
     }
 }
+
 
 @Composable
 fun ExpenseItem(

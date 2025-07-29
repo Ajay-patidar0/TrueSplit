@@ -5,23 +5,16 @@ import android.net.Uri
 import android.util.Patterns
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.DirectionsCar
-import androidx.compose.material.icons.outlined.Movie
-import androidx.compose.material.icons.outlined.ReceiptLong
-import androidx.compose.material.icons.outlined.Restaurant
-import androidx.compose.material.icons.outlined.ShoppingCart
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,6 +53,7 @@ fun GroupDetailScreen(
     var createdBy by remember { mutableStateOf("") }
     var showInviteDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showLeaveConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         db.collection("groups").document(groupId).addSnapshotListener { snapshot, _ ->
@@ -74,9 +68,7 @@ fun GroupDetailScreen(
                         if (rawMembers.all { it is Map<*, *> }) {
                             @Suppress("UNCHECKED_CAST")
                             rawMembers as List<Map<String, String>>
-                        } else {
-                            listOf()
-                        }
+                        } else listOf()
                     }
                     else -> listOf()
                 }
@@ -89,6 +81,22 @@ fun GroupDetailScreen(
             .addSnapshotListener { snapshot, _ ->
                 expenses = snapshot?.documents?.mapNotNull { it.data } ?: listOf()
             }
+    }
+
+    val userBalance = remember(expenses, members) {
+        var balance = 0.0
+        val totalMembers = members.size.takeIf { it > 0 } ?: 1
+        expenses.forEach { expense ->
+            val amount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
+            val paidBy = expense["paidBy"] as? String ?: ""
+            val share = amount / totalMembers
+            if (paidBy == currentUserId) {
+                balance += amount - share
+            } else if (members.any { it["id"] == currentUserId }) {
+                balance -= share
+            }
+        }
+        balance
     }
 
     Scaffold(
@@ -106,6 +114,14 @@ fun GroupDetailScreen(
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Delete Group",
+                                tint = Color.White
+                            )
+                        }
+                    } else if (currentUserEmail != createdBy && String.format("%.2f", userBalance) == "0.00") {
+                        IconButton(onClick = { showLeaveConfirm = true }) {
+                            Icon(
+                                imageVector = Icons.Default.ExitToApp,
+                                contentDescription = "Leave Group",
                                 tint = Color.White
                             )
                         }
@@ -128,7 +144,6 @@ fun GroupDetailScreen(
         },
         containerColor = Color(0xFFF8F9FB)
     ) { padding ->
-
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
             Row(
@@ -242,6 +257,36 @@ fun GroupDetailScreen(
         )
     }
 
+    if (showLeaveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLeaveConfirm = false },
+            title = { Text("Leave Group") },
+            text = { Text("Are you sure you want to leave this group?") },
+            confirmButton = {
+                Button(onClick = {
+                    val updatedMembers = members.filter { it["id"] != currentUserId }
+                    db.collection("groups").document(groupId)
+                        .update("members", updatedMembers)
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
+                            navBack()
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(context, "Failed to leave group", Toast.LENGTH_SHORT).show()
+                        }
+                    showLeaveConfirm = false
+                }) {
+                    Text("Leave")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (showInviteDialog) {
         InviteMemberDialog(onDismiss = { showInviteDialog = false }) { email ->
             if (email.isNotBlank() &&
@@ -266,6 +311,7 @@ fun GroupDetailScreen(
         }
     }
 }
+
 
 
 @Composable

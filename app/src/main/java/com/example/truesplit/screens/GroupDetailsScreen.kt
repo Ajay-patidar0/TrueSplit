@@ -109,7 +109,17 @@ fun GroupDetailScreen(
                     }
                 },
                 actions = {
-                    if (currentUserEmail == createdBy && expenses.isEmpty()) {
+                    val isOnlyAdminLeft = members.size == 1 && members.firstOrNull()?.get("id") == currentUserId
+
+                    if (isOnlyAdminLeft) {
+                        IconButton(onClick = { showDeleteConfirm = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Group",
+                                tint = Color.White
+                            )
+                        }
+                    } else if (currentUserEmail == createdBy && expenses.isEmpty()) {
                         IconButton(onClick = { showDeleteConfirm = true }) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
@@ -134,9 +144,7 @@ fun GroupDetailScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = {
-                    navController.navigate("addExpense/$groupId")
-                },
+                onClick = { navController.navigate("addExpense/$groupId") },
                 containerColor = Color(0xFF2C5A8C)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add Expense", tint = Color.White)
@@ -163,14 +171,10 @@ fun GroupDetailScreen(
                 OutlinedButton(
                     onClick = {
                         val encodedGroupName = Uri.encode(groupName)
-                        val inviteLink =
-                            "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
+                        val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
                         val shareIntent = Intent().apply {
                             action = Intent.ACTION_SEND
-                            putExtra(
-                                Intent.EXTRA_TEXT,
-                                "Join our TrueSplit group \"$groupName\" using this link:\n$inviteLink"
-                            )
+                            putExtra(Intent.EXTRA_TEXT, "Join our TrueSplit group \"$groupName\" using this link:\n$inviteLink")
                             type = "text/plain"
                         }
                         context.startActivity(Intent.createChooser(shareIntent, "Share via"))
@@ -179,12 +183,7 @@ fun GroupDetailScreen(
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2C5A8C))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PersonAdd,
-                        contentDescription = "Invite",
-                        tint = Color(0xFF2C5A8C),
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Icon(Icons.Default.PersonAdd, contentDescription = "Invite", tint = Color(0xFF2C5A8C), modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Invite")
                 }
@@ -192,9 +191,7 @@ fun GroupDetailScreen(
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .padding(16.dp)
-                    .horizontalScroll(rememberScrollState())
+                modifier = Modifier.padding(16.dp).horizontalScroll(rememberScrollState())
             ) {
                 members.forEach { member ->
                     val displayName = member["name"] ?: member["id"] ?: "?"
@@ -213,12 +210,7 @@ fun GroupDetailScreen(
             Divider()
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                "Expenses:",
-                color = Color(0xFF3A3A3A),
-                fontSize = 18.sp,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
+            Text("Expenses:", color = Color(0xFF3A3A3A), fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp))
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(expenses) { expense ->
@@ -257,6 +249,7 @@ fun GroupDetailScreen(
         )
     }
 
+
     if (showLeaveConfirm) {
         AlertDialog(
             onDismissRequest = { showLeaveConfirm = false },
@@ -265,15 +258,28 @@ fun GroupDetailScreen(
             confirmButton = {
                 Button(onClick = {
                     val updatedMembers = members.filter { it["id"] != currentUserId }
-                    db.collection("groups").document(groupId)
-                        .update("members", updatedMembers)
-                        .addOnSuccessListener {
-                            Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
-                            navBack()
-                        }
-                        .addOnFailureListener {
-                            Toast.makeText(context, "Failed to leave group", Toast.LENGTH_SHORT).show()
-                        }
+
+                    if (updatedMembers.isEmpty()) {
+                        db.collection("groups").document(groupId).delete()
+                            .addOnSuccessListener {
+                                Toast.makeText(context, "You left the group and it was deleted", Toast.LENGTH_SHORT).show()
+                                navBack()
+                            }
+                            .addOnFailureListener {
+                                Toast.makeText(context, "Failed to delete group", Toast.LENGTH_SHORT).show()
+                            }
+                    } else {
+                        db.collection("groups").document(groupId)
+                            .update("members", updatedMembers)
+                            .addOnSuccessListener {
+                                Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
+                                navBack()
+                            }
+                            .addOnFailureListener {
+                                Toast.makeText(context, "Failed to leave group", Toast.LENGTH_SHORT).show()
+                            }
+                    }
+
                     showLeaveConfirm = false
                 }) {
                     Text("Leave")
@@ -289,28 +295,23 @@ fun GroupDetailScreen(
 
     if (showInviteDialog) {
         InviteMemberDialog(onDismiss = { showInviteDialog = false }) { email ->
-            if (email.isNotBlank() &&
-                Patterns.EMAIL_ADDRESS.matcher(email).matches() &&
+            if (email.isNotBlank() && Patterns.EMAIL_ADDRESS.matcher(email).matches() &&
                 members.none { it["id"] == email }
             ) {
                 val encodedGroupName = Uri.encode(groupName)
-                val inviteLink =
-                    "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
-
+                val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
                     putExtra(Intent.EXTRA_SUBJECT, "You're invited to join $groupName")
-                    putExtra(
-                        Intent.EXTRA_TEXT,
-                        "Join your group in TrueSplit using this link:\n$inviteLink"
-                    )
+                    putExtra(Intent.EXTRA_TEXT, "Join your group in TrueSplit using this link:\n$inviteLink")
                 }
                 context.startActivity(Intent.createChooser(intent, "Send Invitation"))
             }
         }
     }
 }
+
 
 
 

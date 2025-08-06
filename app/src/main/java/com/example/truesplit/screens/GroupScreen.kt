@@ -1,16 +1,47 @@
 package com.example.truesplit.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -18,28 +49,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.truesplit.R
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.delay
+import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import java.text.NumberFormat
+import java.util.Locale
+import kotlin.math.absoluteValue
 
 data class GroupData(
+    val id: String = "",
     val name: String = "",
     val color: String = "#6CB4C9",
-    val id: String = "",
-    val youOwe: Double = 0.0,
-    val youLend: Double = 0.0
+    val balance: Double = 0.0,
+    val members: List<Map<String, String>> = emptyList()
 )
 
 @Composable
 fun GroupScreen(
     auth: FirebaseAuth,
-    navToDetails: (String) -> Unit,
-    refreshTrigger: Boolean
+    navToDetails: (String) -> Unit
 ) {
     val db = FirebaseFirestore.getInstance()
     val userId = auth.currentUser?.uid ?: return
@@ -48,56 +82,79 @@ fun GroupScreen(
         ?: userEmail.substringBefore("@")
 
     var showDialog by remember { mutableStateOf(false) }
-    var groups by remember { mutableStateOf(listOf<GroupData>()) }
-    var shouldRefresh by remember { mutableStateOf(false) }
+    var groups by remember { mutableStateOf<List<GroupData>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val coroutineScope = rememberCoroutineScope()
 
-    fun fetchGroups() {
-        db.collection("groups")
-            .whereArrayContains("memberIds", userId)
-            .get()
-            .addOnSuccessListener { snapshot ->
-                val fetchedGroups = mutableListOf<GroupData>()
-                snapshot.documents.forEach { doc ->
-                    val groupId = doc.id
-                    val name = doc.getString("name") ?: ""
-                    val color = doc.getString("color") ?: "#6CB4C9"
+    DisposableEffect(userId) {
+        val groupsRef = db.collection("groups").whereArrayContains("memberIds", userId)
+        val listener = groupsRef.addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                isLoading = false
+                return@addSnapshotListener
+            }
+            if (snapshot == null) {
+                isLoading = false
+                return@addSnapshotListener
+            }
 
-                    db.collection("groups").document(groupId).collection("expenses")
-                        .get()
-                        .addOnSuccessListener { expenseSnapshot ->
-                            var youOwe = 0.0
-                            var youLend = 0.0
+            coroutineScope.launch {
+                isLoading = true
+                val groupList = snapshot.documents.mapNotNull { doc ->
+                    val group = doc.toObject(GroupData::class.java)?.copy(id = doc.id)
+                    val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
+                    group?.copy(members = members)
+                }
 
-                            for (expenseDoc in expenseSnapshot.documents) {
-                                val paidBy = expenseDoc.getString("paidBy") ?: continue
-                                val splits = expenseDoc.get("splits") as? Map<String, Any> ?: continue
-                                val totalAmount = expenseDoc.getDouble("amount") ?: 0.0
-                                val yourShare = splits[userId]?.toString()?.toDoubleOrNull() ?: 0.0
+                val groupsWithBalances = groupList.map { group ->
+                    var userBalance = 0.0
+                    try {
+                        val expenseSnapshot = db.collection("groups")
+                            .document(group.id)
+                            .collection("expenses")
+                            .get()
+                            .await()
 
-                                if (paidBy == userId) {
-                                    youLend += (totalAmount - yourShare)
-                                } else {
-                                    youOwe += yourShare
+                        val totalMembers = group.members.size.takeIf { it > 0 } ?: 1
+
+                        expenseSnapshot.documents.forEach { expenseDoc ->
+                            val amount = expenseDoc.getDouble("amount") ?: 0.0
+                            val type = expenseDoc.getString("type") ?: "expense"
+                            val paidBy = expenseDoc.getString("paidBy")
+                            val receivedBy = expenseDoc.getString("receivedBy")
+
+                            when (type) {
+                                "settle" -> {
+                                    if (paidBy == userId) userBalance -= amount
+                                    else if (receivedBy == userId) userBalance += amount
+                                }
+                                else -> {
+                                    if (totalMembers > 0) {
+                                        val share = amount / totalMembers
+                                        if (paidBy == userId) {
+                                            userBalance += amount - share
+                                        } else if (group.members.any { it["id"] == userId }) {
+                                            userBalance -= share
+                                        }
+                                    }
                                 }
                             }
-
-                            fetchedGroups.add(
-                                GroupData(name, color, groupId, youOwe, youLend)
-                            )
-                            groups = fetchedGroups.sortedBy { it.name }
                         }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    group.copy(balance = userBalance)
                 }
-            }
-    }
 
-    LaunchedEffect(refreshTrigger) { fetchGroups() }
-    LaunchedEffect(shouldRefresh) {
-        if (shouldRefresh) {
-            fetchGroups()
-            shouldRefresh = false
+                groups = groupsWithBalances.sortedBy { it.name }
+                isLoading = false
+            }
+        }
+
+        onDispose {
+            listener.remove()
         }
     }
-    LaunchedEffect(userId) { fetchGroups() }
 
     Scaffold(
         topBar = {
@@ -130,128 +187,55 @@ fun GroupScreen(
             }
         },
         floatingActionButton = {
-            IconButton(
+            FloatingActionButton(
                 onClick = { showDialog = true },
-                modifier = Modifier
-                    .size(64.dp)
-                    .background(Color(0xFF2C5A8C), CircleShape)
+                containerColor = Color(0xFF2C5A8C),
+                shape = CircleShape,
+                modifier = Modifier.size(64.dp)
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_add),
+                Icon(
+                    imageVector = Icons.Default.Add,
                     contentDescription = "Add Group",
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(32.dp),
+                    tint = Color.White
                 )
             }
         },
         containerColor = Color(0xFFF8F9FB)
     ) { padding ->
-
-        LazyColumn(
-            contentPadding = PaddingValues(
-                start = padding.calculateStartPadding(LayoutDirection.Ltr),
-                top = padding.calculateTopPadding() + 24.dp,
-                end = padding.calculateEndPadding(LayoutDirection.Ltr),
-                bottom = padding.calculateBottomPadding() + 80.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            if (groups.isEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillParentMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.bg_img),
-                            contentDescription = "No groups",
-                            modifier = Modifier.size(150.dp)
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        Text("No groups yet", fontSize = 20.sp, color = Color(0xFF3A3A3A))
-                        Spacer(Modifier.height(8.dp))
-                        Text("Tap + to create your first group", color = Color(0xFF7D7D7D))
-                    }
-                }
-            } else {
-                itemsIndexed(groups) { index, group ->
-                    val isVisible by remember { mutableStateOf(true) }
-
-                    LaunchedEffect(index) {
-                        delay(index * 100L)
-                    }
-
-                    AnimatedVisibility(
-                        visible = isVisible,
-                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn()
-                    ) {
-                        Card(
-                            shape = RoundedCornerShape(20.dp),
-                            elevation = CardDefaults.cardElevation(6.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                contentPadding = padding,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize().padding(top = 24.dp, bottom = 80.dp)
+            ) {
+                if (groups.isEmpty()) {
+                    item {
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                                .clickable { navToDetails(group.id) }
+                                .fillParentMaxSize()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(android.graphics.Color.parseColor(group.color)))
-                                ) {
-                                    Text(
-                                        text = group.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-                                        color = Color.White,
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                Spacer(Modifier.width(16.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = group.name,
-                                        fontSize = 18.sp,
-                                        color = Color(0xFF3A3A3A),
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Row {
-                                        if (group.youOwe > 0.0) {
-                                            Text(
-                                                text = "You owe ₹%.2f".format(group.youOwe),
-                                                fontSize = 13.sp,
-                                                color = Color(0xFFEA4335),
-                                                modifier = Modifier.padding(end = 8.dp)
-                                            )
-                                        }
-                                        if (group.youLend > 0.0) {
-                                            Text(
-                                                text = "You lent ₹%.2f".format(group.youLend),
-                                                fontSize = 13.sp,
-                                                color = Color(0xFF34A853)
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_right),
-                                    contentDescription = "Go",
-                                    tint = Color(0xFF7D7D7D),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                            Image(
+                                painter = painterResource(id = R.drawable.bg_img),
+                                contentDescription = "No groups",
+                                modifier = Modifier.size(150.dp)
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Text("No groups yet", fontSize = 20.sp, color = Color(0xFF3A3A3A))
+                            Spacer(Modifier.height(8.dp))
+                            Text("Tap + to create your first group", color = Color(0xFF7D7D7D))
                         }
+                    }
+                } else {
+                    items(groups, key = { it.id }) { group ->
+                        GroupCard(group = group, onCardClick = { navToDetails(group.id) })
                     }
                 }
             }
@@ -262,27 +246,88 @@ fun GroupScreen(
         CreateGroupDialog(
             onDismiss = { showDialog = false },
             onCreate = { name, color ->
-                if (userId.isNotEmpty()) {
-                    val group = hashMapOf(
-                        "name" to name,
-                        "color" to color,
-                        "createdBy" to userEmail,
-                        "timestamp" to Timestamp.now(),
-                        "members" to listOf(
-                            mapOf(
-                                "id" to userId,
-                                "name" to userName,
-                                "email" to userEmail
-                            )
-                        ),
-                        "memberIds" to listOf(userId)
-                    )
-                    db.collection("groups").add(group)
-                        .addOnSuccessListener { shouldRefresh = true }
-                    showDialog = false
-                }
+                val group = hashMapOf(
+                    "name" to name,
+                    "color" to color,
+                    "createdBy" to userEmail,
+                    "timestamp" to Timestamp.now(),
+                    "members" to listOf(
+                        mapOf("id" to userId, "name" to userName, "email" to userEmail)
+                    ),
+                    "memberIds" to listOf(userId)
+                )
+                db.collection("groups").add(group)
+                showDialog = false
             }
         )
+    }
+}
+
+@Composable
+private fun GroupCard(
+    group: GroupData,
+    onCardClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currencyFormat = remember { NumberFormat.getCurrencyInstance(Locale("en", "IN")) }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(6.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clickable(onClick = onCardClick)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(android.graphics.Color.parseColor(group.color)))
+            ) {
+                Text(
+                    text = group.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.name,
+                    fontSize = 18.sp,
+                    color = Color(0xFF3A3A3A),
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row {
+                    val balance = group.balance
+                    if (balance.absoluteValue > 0.01) {
+                        val (text, color) = if (balance > 0) {
+                            "You are owed ${currencyFormat.format(balance)}" to Color(0xFF34A853)
+                        } else {
+                            "You owe ${currencyFormat.format(balance.absoluteValue)}" to Color(0xFFEA4335)
+                        }
+                        Text(text = text, fontSize = 13.sp, color = color)
+                    }
+                }
+            }
+
+            Icon(
+                painter = painterResource(id = R.drawable.ic_right),
+                contentDescription = "Go",
+                tint = Color(0xFF7D7D7D),
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 

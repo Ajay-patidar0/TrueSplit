@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ktx.toObject
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.absoluteValue
@@ -39,6 +40,16 @@ private data class SettlementTransaction(
     val toId: String,
     val toName: String,
     val amount: Double
+)
+
+// Represents a pending request from the database.
+private data class SettleRequest(
+    val id: String = "",
+    val fromId: String = "",
+    val fromName: String = "",
+    val toId: String = "",
+    val amount: Double = 0.0,
+    val requestType: String = ""
 )
 
 // Holds the complete state of the settlement screen.
@@ -70,12 +81,31 @@ fun SettleUpScreen(
     var members by remember { mutableStateOf<List<Map<String, String>>?>(null) }
     var expenses by remember { mutableStateOf<List<Map<String, Any>>?>(null) }
 
-    // State for which dialog to show
     var transactionToRemind by remember { mutableStateOf<SettlementTransaction?>(null) }
     var transactionToPay by remember { mutableStateOf<SettlementTransaction?>(null) }
+    var requestToConfirm by remember { mutableStateOf<SettleRequest?>(null) }
+
+    // This listener handles incoming payment confirmation requests in real-time.
+    DisposableEffect(groupId, currentUserId, members) {
+        val requestsListener = db.collection("settle_requests")
+            .whereEqualTo("groupId", groupId)
+            .whereEqualTo("toId", currentUserId) // Requests sent TO me
+            .whereEqualTo("status", "pending")
+            .whereEqualTo("requestType", "payment_confirmation")
+            .addSnapshotListener { snapshot, _ ->
+                val requestDoc = snapshot?.documents?.firstOrNull()
+                if (requestDoc != null) {
+                    val fromId = requestDoc.getString("fromId") ?: ""
+                    val fromName = members?.find { it["id"] == fromId }?.get("name") ?: "Someone"
+                    requestToConfirm = requestDoc.toObject<SettleRequest>()?.copy(id = requestDoc.id, fromName = fromName)
+                } else {
+                    requestToConfirm = null
+                }
+            }
+        onDispose { requestsListener.remove() }
+    }
 
     LaunchedEffect(groupId) {
-        // Use SnapshotListeners to get real-time updates
         db.collection("groups").document(groupId).collection("expenses")
             .addSnapshotListener { snapshot, _ ->
                 expenses = snapshot?.documents?.mapNotNull { it.data }
@@ -116,8 +146,11 @@ fun SettleUpScreen(
 
             if (type == "settle") {
                 if (paidBy != null && receivedBy != null) {
-                    finalBalances[paidBy] = (finalBalances[paidBy] ?: 0.0) - amount
-                    finalBalances[receivedBy] = (finalBalances[receivedBy] ?: 0.0) + amount
+                    // CORRECTED LOGIC:
+                    // The payer's balance INCREASES (becomes less negative).
+                    // The receiver's balance DECREASES (becomes less positive).
+                    finalBalances[paidBy] = (finalBalances[paidBy] ?: 0.0) + amount
+                    finalBalances[receivedBy] = (finalBalances[receivedBy] ?: 0.0) - amount
                 }
             } else {
                 if (paidBy != null) {
@@ -208,34 +241,27 @@ fun SettleUpScreen(
         }
     }
 
-    // Dialog for sending a "Remind" request
     transactionToRemind?.let { transaction ->
         ConfirmActionDialog(
             onDismiss = { transactionToRemind = null },
             onConfirm = {
-                val settleRequest = mapOf(
+                val reminderRequest = mapOf(
                     "groupId" to groupId,
-                    "from" to transaction.fromId,
-                    "to" to currentUserId,
+                    "fromId" to transaction.fromId,
+                    "toId" to currentUserId,
                     "amount" to transaction.amount,
                     "status" to "pending",
                     "requestType" to "reminder",
                     "timestamp" to Timestamp.now()
                 )
-                db.collection("settle_requests").add(settleRequest)
-                    .addOnSuccessListener {
-                        Toast.makeText(context, "Reminder sent to ${transaction.fromName}", Toast.LENGTH_SHORT).show()
-                    }
-                    .addOnFailureListener {
-                        Toast.makeText(context, "Failed to send reminder", Toast.LENGTH_SHORT).show()
-                    }
+                db.collection("settle_requests").add(reminderRequest)
+                    .addOnSuccessListener { Toast.makeText(context, "Reminder sent to ${transaction.fromName}", Toast.LENGTH_SHORT).show() }
             },
             title = "Send Reminder?",
-            text = "This will send a settle-up reminder to ${transaction.fromName} for ${NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(transaction.amount)}."
+            text = "This will send a settle-up reminder to ${transaction.fromName}."
         )
     }
 
-    // New dialog for sending a "Pay" request
     transactionToPay?.let { transaction ->
         RequestPaymentDialog(
             transaction = transaction,
@@ -243,20 +269,44 @@ fun SettleUpScreen(
             onConfirm = { amountToPay ->
                 val payRequest = mapOf(
                     "groupId" to groupId,
-                    "from" to currentUserId, // You are paying
-                    "to" to transaction.toId, // You are paying this person
+                    "fromId" to currentUserId,
+                    "toId" to transaction.toId,
                     "amount" to amountToPay,
                     "status" to "pending",
                     "requestType" to "payment_confirmation",
                     "timestamp" to Timestamp.now()
                 )
                 db.collection("settle_requests").add(payRequest)
+                    .addOnSuccessListener { Toast.makeText(context, "Payment request sent to ${transaction.toName}", Toast.LENGTH_SHORT).show() }
+            }
+        )
+    }
+
+    requestToConfirm?.let { request ->
+        ConfirmPaymentReceivedDialog(
+            request = request,
+            onDismiss = {
+                db.collection("settle_requests").document(request.id).update("status", "rejected")
+                requestToConfirm = null
+            },
+            onConfirm = {
+                val settlement = mapOf(
+                    "title" to "Settlement from ${request.fromName}",
+                    "amount" to request.amount,
+                    "paidBy" to request.fromId,
+                    "receivedBy" to currentUserId,
+                    "type" to "settle",
+                    "timestamp" to Timestamp.now()
+                )
+                db.collection("groups").document(groupId).collection("expenses").add(settlement)
                     .addOnSuccessListener {
-                        Toast.makeText(context, "Payment request sent to ${transaction.toName}", Toast.LENGTH_SHORT).show()
+                        db.collection("settle_requests").document(request.id).update("status", "confirmed")
+                        Toast.makeText(context, "Payment from ${request.fromName} confirmed!", Toast.LENGTH_SHORT).show()
                     }
                     .addOnFailureListener {
-                        Toast.makeText(context, "Failed to send request", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Failed to confirm payment. Please try again.", Toast.LENGTH_SHORT).show()
                     }
+                requestToConfirm = null
             }
         )
     }
@@ -359,9 +409,9 @@ private fun RequestPaymentDialog(
 ) {
     var amountStr by remember { mutableStateOf(String.format("%.2f", transaction.amount)) }
     var isError by remember { mutableStateOf(false) }
+    val amountToPay = amountStr.toDoubleOrNull() ?: 0.0
 
-    val amountToPay = amountStr.toDoubleOrNull()
-    isError = amountToPay == null || amountToPay <= 0 || amountToPay > transaction.amount
+    isError = amountStr.isBlank() || amountToPay <= 0 || amountToPay > (transaction.amount + 0.01)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -378,7 +428,7 @@ private fun RequestPaymentDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = isError,
                     supportingText = {
-                        if(isError) Text("Enter a valid amount up to ${String.format("%.2f", transaction.amount)}")
+                        if(isError) Text("Enter a valid amount up to ${NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(transaction.amount)}")
                     },
                     singleLine = true
                 )
@@ -387,8 +437,10 @@ private fun RequestPaymentDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    amountToPay?.let { onConfirm(it) }
-                    onDismiss()
+                    if (!isError) {
+                        onConfirm(amountToPay)
+                        onDismiss()
+                    }
                 },
                 enabled = !isError
             ) {
@@ -397,6 +449,27 @@ private fun RequestPaymentDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun ConfirmPaymentReceivedDialog(
+    request: SettleRequest,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Confirm Payment") },
+        text = {
+            Text("Did you receive ${NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(request.amount)} from ${request.fromName}?")
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) { Text("Yes, I Received It") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("No") }
         }
     )
 }

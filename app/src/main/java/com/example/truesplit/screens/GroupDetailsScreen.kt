@@ -2,8 +2,8 @@ package com.example.truesplit.screens
 
 import android.content.Intent
 import android.net.Uri
-import android.util.Patterns
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,17 +24,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.absoluteValue
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GroupDetailScreen(
     groupId: String,
@@ -51,13 +50,21 @@ fun GroupDetailScreen(
     var groupName by remember { mutableStateOf("") }
     var groupColor by remember { mutableStateOf(Color.Gray) }
     var members by remember { mutableStateOf(listOf<Map<String, String>>()) }
-    var expenses by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+
+    var allTransactions by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+    val expensesOnly = remember(allTransactions) {
+        allTransactions.filter { it["type"] != "settle" }
+    }
+    val settlementsOnly = remember(allTransactions) {
+        allTransactions.filter { it["type"] == "settle" }
+    }
+
     var createdBy by remember { mutableStateOf("") }
 
     var showInviteDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showLeaveConfirm by remember { mutableStateOf(false) }
-    var showSettleDialog by remember { mutableStateOf(false) }
+    var selectedTabIndex by remember { mutableStateOf(0) }
 
     LaunchedEffect(groupId) {
         db.collection("groups").document(groupId).addSnapshotListener { snapshot, _ ->
@@ -80,35 +87,48 @@ fun GroupDetailScreen(
 
         db.collection("groups").document(groupId)
             .collection("expenses")
-            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, _ ->
-                expenses = snapshot?.documents?.mapNotNull { it.data } ?: emptyList()
+                allTransactions = snapshot?.documents?.mapNotNull { it.data } ?: emptyList()
             }
     }
 
-    val userBalance = remember(expenses, members, currentUserId) {
-        var balance = 0.0
-        val totalMembers = members.size.takeIf { it > 0 } ?: 1
-        expenses.forEach { expense ->
-            val amount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
-            val type = expense["type"] as? String ?: "expense"
-            val paidBy = expense["paidBy"] as? String
-            val receivedBy = expense["receivedBy"] as? String
+    // This calculation is now used for both the user's balance and the group deletion check.
+    val groupBalances = remember(allTransactions, members) {
+        val balances = mutableMapOf<String, Double>()
+        if (members.isEmpty()) return@remember balances
+
+        members.forEach { member ->
+            balances[member["id"]!!] = 0.0
+        }
+
+        allTransactions.forEach { transaction ->
+            val amount = (transaction["amount"] as? Number)?.toDouble() ?: 0.0
+            val type = transaction["type"] as? String ?: "expense"
+            val paidBy = transaction["paidBy"] as? String
+            val receivedBy = transaction["receivedBy"] as? String
 
             if (type == "settle") {
-                if (paidBy == currentUserId) balance -= amount
-                else if (receivedBy == currentUserId) balance += amount
-            } else if (totalMembers > 0) {
-                val share = amount / totalMembers
-                if (paidBy == currentUserId) {
-                    balance += amount - share
-                } else if (members.any { it["id"] == currentUserId }) {
-                    balance -= share
+                if (paidBy != null && receivedBy != null && balances.containsKey(paidBy) && balances.containsKey(receivedBy)) {
+                    balances[paidBy] = balances.getValue(paidBy) + amount
+                    balances[receivedBy] = balances.getValue(receivedBy) - amount
+                }
+            } else {
+                if (paidBy != null && balances.containsKey(paidBy)) {
+                    val share = amount / members.size
+                    balances[paidBy] = balances.getValue(paidBy) + (amount - share)
+                    members.forEach { member ->
+                        if (member["id"] != paidBy) {
+                            balances[member["id"]!!] = balances.getValue(member["id"]!!) - share
+                        }
+                    }
                 }
             }
         }
-        balance
+        balances
     }
+
+    val userBalance = groupBalances[currentUserId] ?: 0.0
 
     Scaffold(
         topBar = {
@@ -145,88 +165,83 @@ fun GroupDetailScreen(
             GroupDetailFABs(
                 balance = userBalance,
                 onAddExpenseClick = { navController.navigate("addExpense/$groupId") },
-                onSettleUpClick = { showSettleDialog = true }
+                onSettleUpClick = { navController.navigate("settle_up/$groupId") }
             )
         }
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+            contentPadding = PaddingValues(bottom = 100.dp)
         ) {
-            OverallBalanceCard(balance = userBalance)
-            MembersCard(members = members)
+            item {
+                OverallBalanceCard(balance = userBalance)
+            }
 
-            ExpenseSectionHeader()
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 100.dp)
-            ) {
-                if (expenses.isEmpty()) {
-                    item {
-                        Text(
-                            "No expenses yet. Add one to get started!",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp)
-                        )
-                    }
-                } else {
-                    items(expenses, key = { it["timestamp"].toString() }) { expense ->
-                        ExpenseListItem(
-                            expense = expense,
-                            members = members,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                        )
+            item {
+                MembersCard(members = members)
+            }
+
+            stickyHeader {
+                val tabs = listOf("Expenses", "Settlements")
+                Surface(shadowElevation = 2.dp) {
+                    TabRow(selectedTabIndex = selectedTabIndex) {
+                        tabs.forEachIndexed { index, title ->
+                            Tab(
+                                selected = selectedTabIndex == index,
+                                onClick = { selectedTabIndex = index },
+                                text = { Text(title) }
+                            )
+                        }
                     }
                 }
             }
-        }
-    }
 
-    if (showSettleDialog) {
-        SettleUpDialog(
-            currentUserId = currentUserId,
-            expenses = expenses,
-            members = members,
-            onDismiss = { showSettleDialog = false },
-            onSettleRequest = { selectedId, amount ->
-                val data = mapOf(
-                    "groupId" to groupId,
-                    "from" to currentUserId,
-                    "to" to selectedId,
-                    "amount" to amount,
-                    "status" to "pending",
-                    "timestamp" to Timestamp.now()
-                )
-                db.collection("settle_requests").add(data)
-                    .addOnSuccessListener {
-                        Toast.makeText(context, "Request sent", Toast.LENGTH_SHORT).show()
-                        showSettleDialog = false
-                    }
-                    .addOnFailureListener {
-                        Toast.makeText(context, "Failed to send request", Toast.LENGTH_SHORT).show()
-                    }
+            val listToDisplay = if (selectedTabIndex == 0) expensesOnly else settlementsOnly
+            val emptyMessage = if (selectedTabIndex == 0) "No expenses yet. Add one to get started!" else "No settlements have been recorded."
+
+            if (listToDisplay.isEmpty()) {
+                item {
+                    Text(
+                        text = emptyMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                items(listToDisplay, key = { it["timestamp"].toString() }) { transaction ->
+                    TransactionListItem(
+                        transaction = transaction,
+                        members = members,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                }
             }
-        )
+        }
     }
 
     if (showDeleteConfirm) {
         ConfirmActionDialog(
             onDismiss = { showDeleteConfirm = false },
             onConfirm = {
-                db.collection("groups").document(groupId).delete()
-                    .addOnSuccessListener {
-                        Toast.makeText(context, "Group deleted", Toast.LENGTH_SHORT).show()
-                        navBack()
-                    }
-                    .addOnFailureListener {
-                        Toast.makeText(context, "Failed to delete group", Toast.LENGTH_SHORT).show()
-                    }
+                // THIS IS THE CORRECTED, SAFE LOGIC FOR DELETING A GROUP.
+                val isAllSettled = groupBalances.values.all { it.absoluteValue < 0.01 }
+                if (isAllSettled) {
+                    db.collection("groups").document(groupId).delete()
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Group deleted", Toast.LENGTH_SHORT).show()
+                            navBack()
+                        }
+                } else {
+                    Toast.makeText(context, "Cannot delete group. All members must settle up first.", Toast.LENGTH_LONG).show()
+                }
             },
             title = "Delete Group",
-            text = "Are you sure you want to delete this group? This action cannot be undone."
+            text = "Are you sure you want to delete this group? This can only be done if all balances are settled."
         )
     }
 
@@ -243,8 +258,6 @@ fun GroupDetailScreen(
                 task.addOnSuccessListener {
                     Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
                     navBack()
-                }.addOnFailureListener {
-                    Toast.makeText(context, "Failed to leave group", Toast.LENGTH_SHORT).show()
                 }
             },
             title = "Leave Group",
@@ -253,27 +266,15 @@ fun GroupDetailScreen(
     }
 
     if (showInviteDialog) {
-        InviteMemberDialog(
-            onDismiss = { showInviteDialog = false }
-        ) { email ->
-            if (members.none { it["email"] == email }) {
-                val encodedGroupName = Uri.encode(groupName)
-                val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
-                    putExtra(Intent.EXTRA_SUBJECT, "You're invited to join '$groupName' on TrueSplit")
-                    putExtra(Intent.EXTRA_TEXT, "Join the group in TrueSplit using this link:\n$inviteLink")
-                }
-                context.startActivity(Intent.createChooser(intent, "Send Invitation"))
-                showInviteDialog = false
-            } else {
-                Toast.makeText(context, "This user is already in the group.", Toast.LENGTH_SHORT).show()
-            }
-        }
+        val encodedGroupName = Uri.encode(groupName)
+        val inviteLink = "https://truesplit.airbridge.io/join?groupId=$groupId&groupName=$encodedGroupName"
+        ShareInviteLinkDialog(
+            onDismiss = { showInviteDialog = false },
+            groupName = groupName,
+            inviteLink = inviteLink
+        )
     }
 }
-
 
 @Composable
 fun OverallBalanceCard(balance: Double) {
@@ -290,7 +291,7 @@ fun OverallBalanceCard(balance: Double) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(text = balanceText, style = MaterialTheme.typography.titleMedium)
@@ -308,7 +309,7 @@ fun OverallBalanceCard(balance: Double) {
 @Composable
 fun MembersCard(members: List<Map<String, String>>) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -347,32 +348,22 @@ fun MembersCard(members: List<Map<String, String>>) {
 }
 
 @Composable
-fun ExpenseSectionHeader() {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(all = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(text = "Expense History", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun ExpenseListItem(
-    expense: Map<String, Any>,
+private fun TransactionListItem(
+    transaction: Map<String, Any>,
     members: List<Map<String, String>>,
     modifier: Modifier = Modifier
 ) {
-    val title = expense["title"] as? String ?: "Untitled"
-    val amount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
-    val paidById = expense["paidBy"] as? String ?: ""
+    val title = transaction["title"] as? String ?: "Untitled"
+    val amount = (transaction["amount"] as? Number)?.toDouble() ?: 0.0
+    val paidById = transaction["paidBy"] as? String ?: ""
     val paidByName = members.find { it["id"] == paidById }?.get("name") ?: "Unknown"
-    val type = expense["type"] as? String ?: "expense"
+    val type = transaction["type"] as? String ?: "expense"
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("en", "IN"))
 
-    val (icon, amountColor) = if (type == "settle") {
-        Icons.Outlined.CheckCircle to Color(0xFF2E7D32)
+    val (icon, subtitle, amountColor) = if (type == "settle") {
+        val receivedById = transaction["receivedBy"] as? String ?: ""
+        val receivedByName = members.find { it["id"] == receivedById }?.get("name") ?: "Unknown"
+        Triple(Icons.Outlined.CheckCircle, "$paidByName paid $receivedByName", Color(0xFF2E7D32))
     } else {
         val categoryIcon = when {
             title.contains("food", true) || title.contains("pizza", true) -> Icons.Outlined.Fastfood
@@ -381,7 +372,7 @@ private fun ExpenseListItem(
             title.contains("movie", true) -> Icons.Outlined.Theaters
             else -> Icons.AutoMirrored.Outlined.ReceiptLong
         }
-        categoryIcon to MaterialTheme.colorScheme.onSurface
+        Triple(categoryIcon, "Paid by $paidByName", MaterialTheme.colorScheme.onSurface)
     }
 
     Card(
@@ -402,7 +393,7 @@ private fun ExpenseListItem(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                Text("Paid by $paidByName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
                 text = currencyFormat.format(amount),
@@ -425,124 +416,11 @@ private fun GroupDetailFABs(
             ExtendedFloatingActionButton(
                 onClick = onSettleUpClick,
                 icon = { Icon(Icons.Default.Check, "Settle Up") },
-                text = { Text("Settle Up") },
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                text = { Text("Settle Up") }
             )
         }
         FloatingActionButton(onClick = onAddExpenseClick) {
             Icon(Icons.Default.Add, "Add Expense")
-        }
-    }
-}
-
-@Composable
-private fun SettleUpDialog(
-    currentUserId: String,
-    expenses: List<Map<String, Any>>,
-    members: List<Map<String, String>>,
-    onDismiss: () -> Unit,
-    onSettleRequest: (selectedId: String, amount: Double) -> Unit
-) {
-    var selectedId by remember { mutableStateOf("") }
-    var amountStr by remember { mutableStateOf("") }
-
-    val owedToYouMap = remember(expenses, members, currentUserId) {
-        val map = mutableMapOf<String, Double>()
-        val totalMembers = members.size.takeIf { it > 0 } ?: 1
-        expenses.forEach { expense ->
-            val amount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
-            val type = expense["type"] as? String ?: "expense"
-            val paidBy = expense["paidBy"] as? String
-            val receivedBy = expense["receivedBy"] as? String
-            if (type == "settle") {
-                if (paidBy == currentUserId && receivedBy != null) map[receivedBy] = (map[receivedBy] ?: 0.0) - amount
-                else if (receivedBy == currentUserId && paidBy != null) map[paidBy] = (map[paidBy] ?: 0.0) + amount
-            } else if (totalMembers > 0) {
-                val share = amount / totalMembers
-                if (paidBy == currentUserId) {
-                    members.filter { it["id"] != currentUserId }.forEach { other ->
-                        val otherId = other["id"] ?: return@forEach
-                        map[otherId] = (map[otherId] ?: 0.0) + share
-                    }
-                } else if (paidBy != null && members.any { it["id"] == currentUserId }) {
-                    map[paidBy] = (map[paidBy] ?: 0.0) - share
-                }
-            }
-        }
-        map.filterValues { it > 0.01 }
-    }
-
-    val membersYouCanSettleWith = members.filter { owedToYouMap.containsKey(it["id"]) }
-    val maxAmount = owedToYouMap[selectedId] ?: 0.0
-
-    LaunchedEffect(selectedId) {
-        amountStr = if (maxAmount > 0) String.format("%.2f", maxAmount) else ""
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Settle Up") },
-        text = {
-            Column {
-                if (membersYouCanSettleWith.isEmpty()) {
-                    Text("No one owes you money right now.")
-                } else {
-                    DropdownMenuSelector(items = membersYouCanSettleWith, selectedId = selectedId, onSelect = { selectedId = it })
-                    Spacer(Modifier.height(12.dp))
-                    if (selectedId.isNotEmpty()) {
-                        OutlinedTextField(
-                            value = amountStr,
-                            onValueChange = { newValue ->
-                                val num = newValue.toDoubleOrNull()
-                                if (newValue.isEmpty() || (num != null && num >= 0 && num <= maxAmount)) {
-                                    amountStr = newValue
-                                }
-                            },
-                            label = { Text("Amount") },
-                            suffix = { Text(String.format("(Max: ₹%.2f)", maxAmount)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val amount = amountStr.toDoubleOrNull() ?: 0.0
-                    if (selectedId.isNotBlank() && amount > 0) onSettleRequest(selectedId, amount)
-                },
-                enabled = selectedId.isNotBlank() && (amountStr.toDoubleOrNull() ?: 0.0) > 0
-            ) { Text("Send Request") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DropdownMenuSelector(items: List<Map<String, String>>, selectedId: String, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedName = items.find { it["id"] == selectedId }?.get("name") ?: "Select a member"
-
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-        OutlinedTextField(
-            value = selectedName,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Settle with") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            items.forEach { member ->
-                val memberId = member["id"]; val memberName = member["name"]
-                if (memberId != null && memberName != null) {
-                    DropdownMenuItem(text = { Text(memberName) }, onClick = { onSelect(memberId); expanded = false })
-                }
-            }
         }
     }
 }
@@ -559,24 +437,41 @@ private fun ConfirmActionDialog(onDismiss: () -> Unit, onConfirm: () -> Unit, ti
 }
 
 @Composable
-private fun InviteMemberDialog(onDismiss: () -> Unit, onInvite: (String) -> Unit) {
-    var email by remember { mutableStateOf("") }
-    val isEmailValid = remember(email) { Patterns.EMAIL_ADDRESS.matcher(email).matches() }
-
+private fun ShareInviteLinkDialog(
+    onDismiss: () -> Unit,
+    groupName: String,
+    inviteLink: String
+) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Invite Member") },
+        title = { Text("Invite via Link") },
         text = {
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("User's Email") },
-                singleLine = true,
-                isError = email.isNotBlank() && !isEmailValid,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Share this link with anyone you want to invite to the '$groupName' group.")
+                OutlinedTextField(
+                    value = inviteLink,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Group Invite Link") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         },
-        confirmButton = { Button(onClick = { onInvite(email) }, enabled = isEmailValid) { Text("Send Invite") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton = {
+            Button(onClick = {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, "Join my group '$groupName' on TrueSplit using this link:\n$inviteLink")
+                }
+                context.startActivity(Intent.createChooser(intent, "Share Invite Link"))
+                onDismiss()
+            }) {
+                Text("Share Link")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
     )
 }

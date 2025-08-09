@@ -1,6 +1,7 @@
 package com.example.truesplit.screens
 
 import android.util.Patterns
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -20,15 +21,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.truesplit.R
-import com.google.android.gms.auth.api.signin.*
-import com.google.firebase.auth.*
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
 
     val context = LocalContext.current
     val db = FirebaseFirestore.getInstance()
+    val coroutineScope = rememberCoroutineScope()
 
     val googleSignInClient = remember {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -38,32 +45,48 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
         GoogleSignIn.getClient(context, gso)
     }
 
+    // This is the new, robust, and crash-proof Google Sign-In handler.
     val googleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            val account = task.result
-            val credential = GoogleAuthProvider.getCredential(account.idToken, null)
-            auth.signInWithCredential(credential).addOnCompleteListener {
-                if (it.isSuccessful) {
-                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-                    db.collection("users").document(userId).get()
-                        .addOnSuccessListener { doc ->
-                            if (doc.exists()) {
-                                navController.navigate("home") {
-                                    popUpTo("login") { inclusive = true }
-                                }
-                            } else {
-                                navController.navigate("profileSetup") {
-                                    popUpTo("login") { inclusive = true }
-                                }
-                            }
+            // This will throw an ApiException if the sign-in fails or is cancelled.
+            val account = task.getResult(ApiException::class.java)!!
+            val idToken = account.idToken!!
+            val credential = GoogleAuthProvider.getCredential(idToken, null)
+
+            coroutineScope.launch {
+                try {
+                    auth.signInWithCredential(credential).await()
+                    val user = auth.currentUser!!
+                    val userDocRef = db.collection("users").document(user.uid)
+                    val userDoc = userDocRef.get().await()
+
+                    if (userDoc.exists()) {
+                        // User document already exists, navigate to the main screen.
+                        navController.navigate("groups") {
+                            popUpTo("login") { inclusive = true }
                         }
+                    } else {
+                        // This is a new user. Create their document and navigate to profile setup.
+                        val newUser = hashMapOf(
+                            "email" to user.email,
+                            "name" to user.displayName,
+                            "uid" to user.uid
+                        )
+                        userDocRef.set(newUser).await()
+                        navController.navigate("profileSetup") {
+                            popUpTo("login") { inclusive = true }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Authentication failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
-        } catch (_: Exception) {
-            // Silently ignore
+        } catch (e: ApiException) {
+            // Handle all Google Sign-In errors gracefully instead of crashing.
+            Toast.makeText(context, "Google Sign-In failed. Please try again.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -126,33 +149,17 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
                     email.isBlank() -> error = "Please enter your email."
                     !Patterns.EMAIL_ADDRESS.matcher(email).matches() -> error = "Invalid email address."
                     password.isBlank() -> error = "Please enter your password."
-                    password.length < 6 -> error = "Password must be at least 6 characters."
                     else -> {
                         isLoading = true
                         auth.signInWithEmailAndPassword(email.trim(), password)
                             .addOnCompleteListener { task ->
                                 isLoading = false
                                 if (task.isSuccessful) {
-                                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-                                    db.collection("users").document(userId).get()
-                                        .addOnSuccessListener { doc ->
-                                            if (doc.exists()) {
-                                                navController.navigate("home") {
-                                                    popUpTo("login") { inclusive = true }
-                                                }
-                                            } else {
-                                                navController.navigate("profileSetup") {
-                                                    popUpTo("login") { inclusive = true }
-                                                }
-                                            }
-                                        }
-                                } else {
-                                    val msg = task.exception?.localizedMessage ?: ""
-                                    error = if (msg.contains("no user record", true)) {
-                                        "Email not registered. Please sign up."
-                                    } else {
-                                        "Incorrect credentials. Please try again."
+                                    navController.navigate("groups") {
+                                        popUpTo("login") { inclusive = true }
                                     }
+                                } else {
+                                    error = "Incorrect credentials. Please try again."
                                 }
                             }
                     }
@@ -210,7 +217,7 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = error,
-                color = Color.Red,
+                color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )

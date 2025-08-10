@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.example.truesplit.utils.ExpenseUtils
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.NumberFormat
@@ -93,39 +94,9 @@ fun GroupDetailScreen(
             }
     }
 
-    // This calculation is now used for both the user's balance and the group deletion check.
+    // This calculation is now used for the user's balance and all safety checks.
     val groupBalances = remember(allTransactions, members) {
-        val balances = mutableMapOf<String, Double>()
-        if (members.isEmpty()) return@remember balances
-
-        members.forEach { member ->
-            balances[member["id"]!!] = 0.0
-        }
-
-        allTransactions.forEach { transaction ->
-            val amount = (transaction["amount"] as? Number)?.toDouble() ?: 0.0
-            val type = transaction["type"] as? String ?: "expense"
-            val paidBy = transaction["paidBy"] as? String
-            val receivedBy = transaction["receivedBy"] as? String
-
-            if (type == "settle") {
-                if (paidBy != null && receivedBy != null && balances.containsKey(paidBy) && balances.containsKey(receivedBy)) {
-                    balances[paidBy] = balances.getValue(paidBy) + amount
-                    balances[receivedBy] = balances.getValue(receivedBy) - amount
-                }
-            } else {
-                if (paidBy != null && balances.containsKey(paidBy)) {
-                    val share = amount / members.size
-                    balances[paidBy] = balances.getValue(paidBy) + (amount - share)
-                    members.forEach { member ->
-                        if (member["id"] != paidBy) {
-                            balances[member["id"]!!] = balances.getValue(member["id"]!!) - share
-                        }
-                    }
-                }
-            }
-        }
-        balances
+        ExpenseUtils.calculateBalances(members, allTransactions)
     }
 
     val userBalance = groupBalances[currentUserId] ?: 0.0
@@ -147,9 +118,12 @@ fun GroupDetailScreen(
                         IconButton(onClick = { showDeleteConfirm = true }) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete Group")
                         }
-                    } else if (userBalance.absoluteValue < 0.01) {
-                        IconButton(onClick = { showLeaveConfirm = true }) {
-                            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Leave Group")
+                    } else {
+                        // The "Leave Group" button is only shown if the user's balance is zero.
+                        if (userBalance.absoluteValue < 0.01) {
+                            IconButton(onClick = { showLeaveConfirm = true }) {
+                                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Leave Group")
+                            }
                         }
                     }
                 },
@@ -228,7 +202,6 @@ fun GroupDetailScreen(
         ConfirmActionDialog(
             onDismiss = { showDeleteConfirm = false },
             onConfirm = {
-                // THIS IS THE CORRECTED, SAFE LOGIC FOR DELETING A GROUP.
                 val isAllSettled = groupBalances.values.all { it.absoluteValue < 0.01 }
                 if (isAllSettled) {
                     db.collection("groups").document(groupId).delete()
@@ -249,19 +222,31 @@ fun GroupDetailScreen(
         ConfirmActionDialog(
             onDismiss = { showLeaveConfirm = false },
             onConfirm = {
-                val updatedMembers = members.filter { it["id"] != currentUserId }
-                val task = if (updatedMembers.isEmpty()) {
-                    db.collection("groups").document(groupId).delete()
+                // Safety check: The user's balance must be zero to leave.
+                if (userBalance.absoluteValue < 0.01) {
+                    val updatedMembers = members.filter { it["id"] != currentUserId }
+                    val updatedMemberIds = members.mapNotNull { it["id"] }.filter { it != currentUserId }
+
+                    val task = if (updatedMembers.isEmpty()) {
+                        db.collection("groups").document(groupId).delete()
+                    } else {
+                        db.collection("groups").document(groupId).update(
+                            mapOf(
+                                "members" to updatedMembers,
+                                "memberIds" to updatedMemberIds
+                            )
+                        )
+                    }
+                    task.addOnSuccessListener {
+                        Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
+                        navBack()
+                    }
                 } else {
-                    db.collection("groups").document(groupId).update("members", updatedMembers)
-                }
-                task.addOnSuccessListener {
-                    Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
-                    navBack()
+                    Toast.makeText(context, "Cannot leave group until your balance is settled.", Toast.LENGTH_LONG).show()
                 }
             },
             title = "Leave Group",
-            text = "Are you sure you want to leave this group?"
+            text = "You can only leave this group if your balance is zero. Are you sure you want to leave?"
         )
     }
 

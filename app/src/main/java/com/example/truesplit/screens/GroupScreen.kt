@@ -52,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.truesplit.R
+import com.example.truesplit.utils.ExpenseUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -88,7 +89,9 @@ fun GroupScreen(
 
     DisposableEffect(userId) {
         val groupsRef = db.collection("groups").whereArrayContains("memberIds", userId)
-        val listener = groupsRef.addSnapshotListener { snapshot, error ->
+        val groupListeners = mutableListOf<ListenerRegistration>()
+
+        val mainListener = groupsRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
                 isLoading = false
                 return@addSnapshotListener
@@ -98,63 +101,54 @@ fun GroupScreen(
                 return@addSnapshotListener
             }
 
-            coroutineScope.launch {
-                isLoading = true
-                val groupList = snapshot.documents.mapNotNull { doc ->
-                    val group = doc.toObject(GroupData::class.java)?.copy(id = doc.id)
-                    val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
-                    group?.copy(members = members)
-                }
+            isLoading = true
 
-                val groupsWithBalances = groupList.map { group ->
-                    var userBalance = 0.0
-                    try {
-                        val expenseSnapshot = db.collection("groups")
-                            .document(group.id)
-                            .collection("expenses")
-                            .get()
-                            .await()
+            // Remove old expense listeners when group list changes
+            groupListeners.forEach { it.remove() }
+            groupListeners.clear()
 
-                        val totalMembers = group.members.size.takeIf { it > 0 } ?: 1
+            val fetchedGroups = snapshot.documents.mapNotNull { doc ->
+                val group = doc.toObject(GroupData::class.java)?.copy(id = doc.id)
+                val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
+                group?.copy(members = members)
+            }
 
-                        expenseSnapshot.documents.forEach { expenseDoc ->
-                            val amount = expenseDoc.getDouble("amount") ?: 0.0
-                            val type = expenseDoc.getString("type") ?: "expense"
-                            val paidBy = expenseDoc.getString("paidBy")
-                            val receivedBy = expenseDoc.getString("receivedBy")
+            // Set up listeners for each group's expenses
+            fetchedGroups.forEach { group ->
+                val expenseListener = db.collection("groups")
+                    .document(group.id)
+                    .collection("expenses")
+                    .addSnapshotListener { expenseSnap, _ ->
+                        if (expenseSnap == null) return@addSnapshotListener
 
-                            when (type) {
-                                "settle" -> {
-                                    if (paidBy == userId) userBalance -= amount
-                                    else if (receivedBy == userId) userBalance += amount
-                                }
-                                else -> {
-                                    if (totalMembers > 0) {
-                                        val share = amount / totalMembers
-                                        if (paidBy == userId) {
-                                            userBalance += amount - share
-                                        } else if (group.members.any { it["id"] == userId }) {
-                                            userBalance -= share
-                                        }
-                                    }
-                                }
-                            }
+                        val transactions = expenseSnap.documents.map { doc ->
+                            mapOf(
+                                "amount" to (doc.getDouble("amount") ?: 0.0),
+                                "type" to (doc.getString("type") ?: "expense"),
+                                "paidBy" to (doc.getString("paidBy") ?: ""),
+                                "receivedBy" to (doc.getString("receivedBy") ?: "")
+                            )
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                    group.copy(balance = userBalance)
-                }
 
-                groups = groupsWithBalances.sortedBy { it.name }
-                isLoading = false
+                        val balances = ExpenseUtils.calculateBalances(group.members, transactions)
+                        val userBalance = balances[userId] ?: 0.0
+
+                        groups = fetchedGroups.map {
+                            if (it.id == group.id) it.copy(balance = userBalance) else it
+                        }.sortedBy { it.name }
+
+                        isLoading = false
+                    }
+                groupListeners.add(expenseListener)
             }
         }
 
         onDispose {
-            listener.remove()
+            mainListener.remove()
+            groupListeners.forEach { it.remove() }
         }
     }
+
 
     Scaffold(
         topBar = {

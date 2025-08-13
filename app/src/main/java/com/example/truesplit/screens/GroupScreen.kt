@@ -1,5 +1,7 @@
 package com.example.truesplit.screens
 
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -38,27 +39,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.truesplit.R
+import com.example.truesplit.model.SettleRequest
 import com.example.truesplit.utils.ExpenseUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import com.google.firebase.firestore.ktx.toObject
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.absoluteValue
@@ -81,18 +84,23 @@ fun GroupScreen(
     val userEmail = auth.currentUser?.email ?: return
     val userName = auth.currentUser?.displayName?.takeIf { it.isNotBlank() }
         ?: userEmail.substringBefore("@")
+    val context = LocalContext.current
 
     var showDialog by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf<List<GroupData>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
-    val coroutineScope = rememberCoroutineScope()
 
+    // Track request IDs already handled in this session so we don't show duplicates
+    val processedRequestIds = remember { mutableStateListOf<String>() }
+
+    // ===================== Groups + expenses listeners =====================
     DisposableEffect(userId) {
         val groupsRef = db.collection("groups").whereArrayContains("memberIds", userId)
         val groupListeners = mutableListOf<ListenerRegistration>()
 
         val mainListener = groupsRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
+                Log.e("GroupScreen", "Groups listener error", error)
                 isLoading = false
                 return@addSnapshotListener
             }
@@ -103,17 +111,17 @@ fun GroupScreen(
 
             isLoading = true
 
-            // Remove old expense listeners when group list changes
+            // clear previous expense listeners
             groupListeners.forEach { it.remove() }
             groupListeners.clear()
 
             val fetchedGroups = snapshot.documents.mapNotNull { doc ->
-                val group = doc.toObject(GroupData::class.java)?.copy(id = doc.id)
+                val base = doc.toObject(GroupData::class.java)?.copy(id = doc.id)
                 val members = doc.get("members") as? List<Map<String, String>> ?: emptyList()
-                group?.copy(members = members)
+                base?.copy(members = members)
             }
 
-            // Set up listeners for each group's expenses
+            // Listen to expenses per group to compute balances
             fetchedGroups.forEach { group ->
                 val expenseListener = db.collection("groups")
                     .document(group.id)
@@ -121,12 +129,12 @@ fun GroupScreen(
                     .addSnapshotListener { expenseSnap, _ ->
                         if (expenseSnap == null) return@addSnapshotListener
 
-                        val transactions = expenseSnap.documents.map { doc ->
+                        val transactions = expenseSnap.documents.map { d ->
                             mapOf(
-                                "amount" to (doc.getDouble("amount") ?: 0.0),
-                                "type" to (doc.getString("type") ?: "expense"),
-                                "paidBy" to (doc.getString("paidBy") ?: ""),
-                                "receivedBy" to (doc.getString("receivedBy") ?: "")
+                                "amount" to (d.getDouble("amount") ?: 0.0),
+                                "type" to (d.getString("type") ?: "expense"),
+                                "paidBy" to (d.getString("paidBy") ?: ""),
+                                "receivedBy" to (d.getString("receivedBy") ?: "")
                             )
                         }
 
@@ -149,7 +157,68 @@ fun GroupScreen(
         }
     }
 
+    // ===================== Settle requests listener =====================
+    var showReminderDialog by remember { mutableStateOf<Pair<String, Double>?>(null) }
+    var currentPaymentRequest by remember { mutableStateOf<SettleRequest?>(null) }
+    var currentRequestId by remember { mutableStateOf<String?>(null) }
 
+    LaunchedEffect(userId) {
+        db.collection("settle_requests")
+            .whereEqualTo("toId", userId)           // listen requests targeted to this user
+            .whereEqualTo("status", "pending")      // only pending
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e("GroupScreen", "Settle requests listener error", error)
+                    return@addSnapshotListener
+                }
+
+                snapshot?.documentChanges?.forEach { change ->
+                    val docId = change.document.id
+
+                    // Ignore if we've already processed this request in this session
+                    if (docId in processedRequestIds) return@forEach
+
+                    if (change.type == DocumentChange.Type.ADDED) {
+                        val request = change.document.toObject<SettleRequest>() ?: return@forEach
+
+                        // Only act on pending requests (extra safety)
+                        if (request.status != "pending") {
+                            processedRequestIds.add(docId)
+                            return@forEach
+                        }
+
+                        when (request.requestType) {
+                            "reminder" -> {
+                                // show a one-time reminder dialog
+                                showReminderDialog = request.fromName to request.amount
+
+                                // mark as seen so it won't show again (and add to processed ids)
+                                db.collection("settle_requests").document(docId)
+                                    .update(mapOf("status" to "seen"))
+                                    .addOnSuccessListener { processedRequestIds.add(docId) }
+                                    .addOnFailureListener {
+                                        // even if update fails, add to processed so we don't spam the UI repeatedly
+                                        processedRequestIds.add(docId)
+                                    }
+                            }
+                            "payment_confirmation" -> {
+                                // keep request object & id in state so user can Accept/Reject
+                                currentPaymentRequest = request
+                                currentRequestId = docId
+                                // mark as "notified" in memory so the ADDED handler won't re-show (but keep status pending until accept/reject)
+                                processedRequestIds.add(docId)
+                            }
+                            else -> {
+                                // unknown type: mark processed
+                                processedRequestIds.add(docId)
+                            }
+                        }
+                    }
+                }
+            }
+    }
+
+    // ===================== UI =====================
     Scaffold(
         topBar = {
             Box(
@@ -205,13 +274,15 @@ fun GroupScreen(
             LazyColumn(
                 contentPadding = padding,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize().padding(top = 24.dp, bottom = 80.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 24.dp, bottom = 80.dp)
             ) {
                 if (groups.isEmpty()) {
                     item {
                         Column(
                             modifier = Modifier
-                                .fillParentMaxSize()
+                                .fillMaxSize()
                                 .padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
@@ -221,9 +292,9 @@ fun GroupScreen(
                                 contentDescription = "No groups",
                                 modifier = Modifier.size(150.dp)
                             )
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.size(16.dp))
                             Text("No groups yet", fontSize = 20.sp, color = Color(0xFF3A3A3A))
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.size(8.dp))
                             Text("Tap + to create your first group", color = Color(0xFF7D7D7D))
                         }
                     }
@@ -236,6 +307,7 @@ fun GroupScreen(
         }
     }
 
+    // ===================== Create group dialog =====================
     if (showDialog) {
         CreateGroupDialog(
             onDismiss = { showDialog = false },
@@ -252,6 +324,84 @@ fun GroupScreen(
                 )
                 db.collection("groups").add(group)
                 showDialog = false
+            }
+        )
+    }
+
+    // ===================== Reminder dialog UI =====================
+    if (showReminderDialog != null) {
+        val (fromName, amount) = showReminderDialog!!
+        AlertDialog(
+            onDismissRequest = { showReminderDialog = null },
+            title = { Text("Reminder") },
+            text = { Text("$fromName reminded you to settle ₹$amount") },
+            confirmButton = {
+                TextButton(onClick = { showReminderDialog = null }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
+    // ===================== Payment confirmation UI =====================
+    if (currentPaymentRequest != null && currentRequestId != null) {
+        val req = currentPaymentRequest!!
+        AlertDialog(
+            onDismissRequest = {
+                // allow user to dismiss without changing request; remove in-memory reference
+                currentPaymentRequest = null
+                currentRequestId = null
+            },
+            title = { Text("Settle Up Request") },
+            text = { Text("${req.fromName} wants you to confirm payment of ₹${req.amount}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    // create a "settle" expense (title included) so SettleUpScreen / ExpenseUtils pick it up correctly
+                    val settleExpense = hashMapOf(
+                        "title" to "Settlement from ${req.fromName}",
+                        "amount" to req.amount,
+                        "type" to "settle",           // use "settle" to match SettleUpScreen logic
+                        "paidBy" to req.fromId,
+                        "receivedBy" to userId,
+                        "timestamp" to Timestamp.now()
+                    )
+
+                    db.collection("groups")
+                        .document(req.groupId)
+                        .collection("expenses")
+                        .add(settleExpense)
+                        .addOnSuccessListener {
+                            // mark request completed so it's not shown again
+                            db.collection("settle_requests")
+                                .document(currentRequestId!!)
+                                .update(mapOf("status" to "completed"))
+                                .addOnSuccessListener {
+                                    Toast.makeText(context, "Payment accepted and settlement added", Toast.LENGTH_SHORT).show()
+                                }
+                            currentPaymentRequest = null
+                            currentRequestId = null
+                        }
+                        .addOnFailureListener { ex ->
+                            Log.e("GroupScreen", "Failed to add settlement expense", ex)
+                            Toast.makeText(context, "Failed to accept payment", Toast.LENGTH_SHORT).show()
+                        }
+                }) { Text("Accept") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    // Reject the request explicitly
+                    db.collection("settle_requests")
+                        .document(currentRequestId!!)
+                        .update(mapOf("status" to "rejected"))
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Payment rejected", Toast.LENGTH_SHORT).show()
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(context, "Failed to reject", Toast.LENGTH_SHORT).show()
+                        }
+                    currentPaymentRequest = null
+                    currentRequestId = null
+                }) { Text("Reject") }
             }
         )
     }
@@ -293,7 +443,7 @@ private fun GroupCard(
                 )
             }
 
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.size(16.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -348,9 +498,9 @@ fun CreateGroupDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(15.dp)
                 )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.size(16.dp))
                 Text("Select Icon Color", color = Color(0xFF3A3A3A))
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.size(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     colors.forEach { colorCode ->
                         Box(

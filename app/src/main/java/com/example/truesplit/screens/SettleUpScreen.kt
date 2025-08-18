@@ -1,6 +1,9 @@
 package com.example.truesplit.screens
 
+import android.content.Intent
+import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,10 +23,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.truesplit.R
+import com.example.truesplit.model.SettleRequest
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -33,7 +39,6 @@ import java.util.Locale
 import kotlin.math.absoluteValue
 import kotlin.math.min
 
-// Represents a specific transaction needed to settle debts.
 private data class SettlementTransaction(
     val fromId: String,
     val fromName: String,
@@ -42,24 +47,12 @@ private data class SettlementTransaction(
     val amount: Double
 )
 
-// Represents a pending request from the database.
-private data class SettleRequest(
-    val id: String = "",
-    val fromId: String = "",
-    val fromName: String = "",
-    val toId: String = "",
-    val amount: Double = 0.0,
-    val requestType: String = ""
-)
-
-// Holds the complete state of the settlement screen.
 private data class SettleUpState(
     val debtsOwedToUser: List<SettlementTransaction> = emptyList(),
     val debtsUserOwes: List<SettlementTransaction> = emptyList(),
     val isLoading: Boolean = true
 )
 
-// Helper class to hold UI details for a settlement item.
 private data class SettlementActionDetails(
     val text: String,
     val color: Color,
@@ -71,48 +64,58 @@ private data class SettlementActionDetails(
 @Composable
 fun SettleUpScreen(
     groupId: String,
+    groupName: String,
     navBack: () -> Unit
 ) {
     val db = FirebaseFirestore.getInstance()
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
     val currentUserId = auth.currentUser?.uid ?: return
+    val currentUserName = auth.currentUser?.displayName ?: "You"
 
     var members by remember { mutableStateOf<List<Map<String, String>>?>(null) }
     var expenses by remember { mutableStateOf<List<Map<String, Any>>?>(null) }
-
     var transactionToRemind by remember { mutableStateOf<SettlementTransaction?>(null) }
     var transactionToPay by remember { mutableStateOf<SettlementTransaction?>(null) }
     var requestToConfirm by remember { mutableStateOf<SettleRequest?>(null) }
 
-    // This listener handles incoming payment confirmation requests in real-time.
     DisposableEffect(groupId, currentUserId, members) {
         val requestsListener = db.collection("settle_requests")
             .whereEqualTo("groupId", groupId)
-            .whereEqualTo("toId", currentUserId) // Requests sent TO me
+            .whereEqualTo("toId", currentUserId)
             .whereEqualTo("status", "pending")
             .whereEqualTo("requestType", "payment_confirmation")
-            .addSnapshotListener { snapshot, _ ->
-                val requestDoc = snapshot?.documents?.firstOrNull()
-                if (requestDoc != null) {
-                    val fromId = requestDoc.getString("fromId") ?: ""
-                    val fromName = members?.find { it["id"] == fromId }?.get("name") ?: "Someone"
-                    requestToConfirm = requestDoc.toObject<SettleRequest>()?.copy(id = requestDoc.id, fromName = fromName)
-                } else {
-                    requestToConfirm = null
+            .addSnapshotListener { snapshot, error ->
+                error?.let {
+                    Log.e("SettleUpScreen", "Payment confirmation listener error", it)
+                    return@addSnapshotListener
                 }
+
+                snapshot?.documents?.firstOrNull()?.let { doc ->
+                    val fromId = doc.getString("fromId") ?: ""
+                    val fromName = members?.find { it["id"] == fromId }?.get("name") ?: "Someone"
+                    requestToConfirm = doc.toObject<SettleRequest>()?.copy(id = doc.id, fromName = fromName)
+                } ?: run { requestToConfirm = null }
             }
         onDispose { requestsListener.remove() }
     }
 
     LaunchedEffect(groupId) {
         db.collection("groups").document(groupId).collection("expenses")
-            .addSnapshotListener { snapshot, _ ->
+            .addSnapshotListener { snapshot, error ->
+                error?.let {
+                    Log.e("SettleUpScreen", "Expenses listener error", it)
+                    return@addSnapshotListener
+                }
                 expenses = snapshot?.documents?.mapNotNull { it.data }
             }
 
         db.collection("groups").document(groupId)
-            .addSnapshotListener { snapshot, _ ->
+            .addSnapshotListener { snapshot, error ->
+                error?.let {
+                    Log.e("SettleUpScreen", "Members listener error", it)
+                    return@addSnapshotListener
+                }
                 val rawMembers = snapshot?.get("members")
                 members = if (rawMembers is List<*>) {
                     rawMembers.filterIsInstance<Map<String, String>>()
@@ -146,9 +149,6 @@ fun SettleUpScreen(
 
             if (type == "settle") {
                 if (paidBy != null && receivedBy != null) {
-                    // CORRECTED LOGIC:
-                    // The payer's balance INCREASES (becomes less negative).
-                    // The receiver's balance DECREASES (becomes less positive).
                     finalBalances[paidBy] = (finalBalances[paidBy] ?: 0.0) + amount
                     finalBalances[receivedBy] = (finalBalances[receivedBy] ?: 0.0) - amount
                 }
@@ -178,7 +178,13 @@ fun SettleUpScreen(
             val debtorName = allMembers.find { it["id"] == debtorId }?.get("name") ?: "Unknown"
             val creditorName = allMembers.find { it["id"] == creditorId }?.get("name") ?: "Unknown"
 
-            allSettlements.add(SettlementTransaction(debtorId, debtorName, creditorId, creditorName, transferAmount))
+            allSettlements.add(SettlementTransaction(
+                fromId = debtorId,
+                fromName = debtorName,
+                toId = creditorId,
+                toName = creditorName,
+                amount = transferAmount
+            ))
 
             debtors[debtorId] = debtorAmount + transferAmount
             creditors[creditorId] = creditorAmount - transferAmount
@@ -242,23 +248,40 @@ fun SettleUpScreen(
     }
 
     transactionToRemind?.let { transaction ->
-        ConfirmActionDialog(
-            onDismiss = { transactionToRemind = null },
-            onConfirm = {
-                val reminderRequest = mapOf(
-                    "groupId" to groupId,
-                    "fromId" to transaction.fromId,
-                    "toId" to currentUserId,
-                    "amount" to transaction.amount,
-                    "status" to "pending",
-                    "requestType" to "reminder",
-                    "timestamp" to Timestamp.now()
-                )
-                db.collection("settle_requests").add(reminderRequest)
-                    .addOnSuccessListener { Toast.makeText(context, "Reminder sent to ${transaction.fromName}", Toast.LENGTH_SHORT).show() }
+        val shareMessage = "${transaction.fromName}, you owe me ${formatCurrency(transaction.amount)} in the group '$groupName'. " +
+                "Please settle up using this link: https://truesplit.airbridge.io/reminder?groupId=$groupId"
+
+        val sendIntent = Intent().apply {
+            action = Intent.ACTION_SEND
+            putExtra(Intent.EXTRA_TEXT, shareMessage)
+            type = "text/plain"
+        }
+
+        AlertDialog(
+            onDismissRequest = { transactionToRemind = null },
+            title = { Text("Send Reminder") },
+            text = {
+                Column {
+                    Text("You'll be sharing this message:")
+                    Spacer(Modifier.height(8.dp))
+                    Text(shareMessage, style = MaterialTheme.typography.bodyMedium)
+                }
             },
-            title = "Send Reminder?",
-            text = "This will send a settle-up reminder to ${transaction.fromName}."
+            confirmButton = {
+                Button(
+                    onClick = {
+                        context.startActivity(Intent.createChooser(sendIntent, "Share reminder via"))
+                        transactionToRemind = null
+                    }
+                ) {
+                    Text("Share")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { transactionToRemind = null }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 
@@ -267,46 +290,91 @@ fun SettleUpScreen(
             transaction = transaction,
             onDismiss = { transactionToPay = null },
             onConfirm = { amountToPay ->
-                val payRequest = mapOf(
-                    "groupId" to groupId,
-                    "fromId" to currentUserId,
-                    "toId" to transaction.toId,
-                    "amount" to amountToPay,
-                    "status" to "pending",
-                    "requestType" to "payment_confirmation",
-                    "timestamp" to Timestamp.now()
+                val payRequest = SettleRequest(
+                    groupId = groupId,
+                    fromId = currentUserId,
+                    fromName = currentUserName,
+                    toId = transaction.toId,
+                    toName = transaction.toName,
+                    amount = amountToPay,
+                    requestType = "payment_confirmation",
+                    status = "pending",
+                    timestamp = Timestamp.now()
                 )
+
                 db.collection("settle_requests").add(payRequest)
-                    .addOnSuccessListener { Toast.makeText(context, "Payment request sent to ${transaction.toName}", Toast.LENGTH_SHORT).show() }
+                    .addOnSuccessListener {
+                        Toast.makeText(context, "Payment request sent to ${transaction.toName}", Toast.LENGTH_SHORT).show()
+                        transactionToPay = null
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("SettleUpScreen", "Error sending payment request", e)
+                        Toast.makeText(context, "Failed to send payment request", Toast.LENGTH_SHORT).show()
+                    }
             }
         )
     }
 
     requestToConfirm?.let { request ->
-        ConfirmPaymentReceivedDialog(
-            request = request,
-            onDismiss = {
-                db.collection("settle_requests").document(request.id).update("status", "rejected")
+        AlertDialog(
+            onDismissRequest = {
+                db.collection("settle_requests").document(request.id)
+                    .update("status", "rejected")
+                    .addOnFailureListener { e ->
+                        Log.e("SettleUpScreen", "Error rejecting payment", e)
+                    }
                 requestToConfirm = null
             },
-            onConfirm = {
-                val settlement = mapOf(
-                    "title" to "Settlement from ${request.fromName}",
-                    "amount" to request.amount,
-                    "paidBy" to request.fromId,
-                    "receivedBy" to currentUserId,
-                    "type" to "settle",
-                    "timestamp" to Timestamp.now()
-                )
-                db.collection("groups").document(groupId).collection("expenses").add(settlement)
-                    .addOnSuccessListener {
-                        db.collection("settle_requests").document(request.id).update("status", "confirmed")
-                        Toast.makeText(context, "Payment from ${request.fromName} confirmed!", Toast.LENGTH_SHORT).show()
+            title = { Text("Confirm Payment") },
+            text = {
+                Text("Did you receive ${formatCurrency(request.amount)} from ${request.fromName}?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val settlement = mapOf(
+                            "title" to "Settlement from ${request.fromName}",
+                            "amount" to request.amount,
+                            "paidBy" to request.fromId,
+                            "receivedBy" to currentUserId,
+                            "type" to "settle",
+                            "timestamp" to Timestamp.now()
+                        )
+
+                        db.collection("groups").document(groupId).collection("expenses")
+                            .add(settlement)
+                            .addOnSuccessListener {
+                                db.collection("settle_requests").document(request.id)
+                                    .update("status", "confirmed")
+                                    .addOnSuccessListener {
+                                        Toast.makeText(context, "Payment confirmed!", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .addOnFailureListener { e ->
+                                        Log.e("SettleUpScreen", "Error confirming payment", e)
+                                        Toast.makeText(context, "Payment recorded but status update failed", Toast.LENGTH_SHORT).show()
+                                    }
+                                requestToConfirm = null
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("SettleUpScreen", "Error recording payment", e)
+                                Toast.makeText(context, "Failed to confirm payment", Toast.LENGTH_SHORT).show()
+                            }
                     }
-                    .addOnFailureListener {
-                        Toast.makeText(context, "Failed to confirm payment. Please try again.", Toast.LENGTH_SHORT).show()
-                    }
-                requestToConfirm = null
+                ) {
+                    Text("Confirm Received")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    db.collection("settle_requests").document(request.id)
+                        .update("status", "rejected")
+                        .addOnFailureListener { e ->
+                            Log.e("SettleUpScreen", "Error rejecting payment", e)
+                        }
+                    requestToConfirm = null
+                }) {
+                    Text("Cancel")
+                }
             }
         )
     }
@@ -373,7 +441,7 @@ private fun SettlementListItem(
             }
             Button(onClick = onActionClick) {
                 Icon(details.buttonIcon, contentDescription = details.buttonText, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(details.buttonText)
             }
         }
@@ -394,7 +462,7 @@ private fun EmptyState(isOwedToUser: Boolean) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Filled.CheckCircle, contentDescription = "All Settled Up", modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp))
             Text("All Settled Up!", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
@@ -419,7 +487,7 @@ private fun RequestPaymentDialog(
         text = {
             Column {
                 Text("Enter the amount you wish to pay. They will need to confirm this payment.", style = MaterialTheme.typography.bodyMedium)
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = amountStr,
                     onValueChange = { amountStr = it },
@@ -453,38 +521,6 @@ private fun RequestPaymentDialog(
     )
 }
 
-@Composable
-private fun ConfirmPaymentReceivedDialog(
-    request: SettleRequest,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Confirm Payment") },
-        text = {
-            Text("Did you receive ${NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(request.amount)} from ${request.fromName}?")
-        },
-        confirmButton = {
-            Button(onClick = onConfirm) { Text("Yes, I Received It") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("No") }
-        }
-    )
-}
-
-@Composable
-private fun ConfirmActionDialog(onDismiss: () -> Unit, onConfirm: () -> Unit, title: String, text: String) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = {
-            Button(onClick = { onConfirm(); onDismiss() }) { Text("Confirm") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
+private fun formatCurrency(amount: Double): String {
+    return NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(amount)
 }

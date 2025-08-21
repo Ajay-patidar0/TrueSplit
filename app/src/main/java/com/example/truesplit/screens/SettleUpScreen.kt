@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.truesplit.R
 import com.example.truesplit.model.SettleRequest
+import com.example.truesplit.utils.ExpenseUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -71,13 +72,29 @@ fun SettleUpScreen(
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
     val currentUserId = auth.currentUser?.uid ?: return
-    val currentUserName = auth.currentUser?.displayName ?: "You"
+    var currentUserName by remember { mutableStateOf("You") }
 
     var members by remember { mutableStateOf<List<Map<String, String>>?>(null) }
     var expenses by remember { mutableStateOf<List<Map<String, Any>>?>(null) }
     var transactionToRemind by remember { mutableStateOf<SettlementTransaction?>(null) }
     var transactionToPay by remember { mutableStateOf<SettlementTransaction?>(null) }
     var requestToConfirm by remember { mutableStateOf<SettleRequest?>(null) }
+
+    // Fetch current user's name from Firestore
+    LaunchedEffect(currentUserId) {
+        if (currentUserId.isNotBlank()) {
+            db.collection("users").document(currentUserId).get()
+                .addOnSuccessListener { document ->
+                    if (document.exists()) {
+                        currentUserName = document.getString("name") ?: "You"
+                    }
+                }
+                .addOnFailureListener {
+                    // Use display name as fallback
+                    currentUserName = auth.currentUser?.displayName ?: "You"
+                }
+        }
+    }
 
     DisposableEffect(groupId, currentUserId, members) {
         val requestsListener = db.collection("settle_requests")
@@ -92,9 +109,8 @@ fun SettleUpScreen(
                 }
 
                 snapshot?.documents?.firstOrNull()?.let { doc ->
-                    val fromId = doc.getString("fromId") ?: ""
-                    val fromName = members?.find { it["id"] == fromId }?.get("name") ?: "Someone"
-                    requestToConfirm = doc.toObject<SettleRequest>()?.copy(id = doc.id, fromName = fromName)
+                    val request = doc.toObject<SettleRequest>()?.copy(id = doc.id)
+                    requestToConfirm = request
                 } ?: run { requestToConfirm = null }
             }
         onDispose { requestsListener.remove() }
@@ -107,7 +123,22 @@ fun SettleUpScreen(
                     Log.e("SettleUpScreen", "Expenses listener error", it)
                     return@addSnapshotListener
                 }
-                expenses = snapshot?.documents?.mapNotNull { it.data }
+                // CORRECTED: Extract ALL necessary fields including splits
+                expenses = snapshot?.documents?.mapNotNull { d ->
+                    val data = d.data ?: return@mapNotNull null
+                    mutableMapOf<String, Any>().apply {
+                        put("amount", data["amount"] as? Number ?: 0.0)
+                        put("type", data["type"] as? String ?: "expense")
+                        put("paidBy", data["paidBy"] as? String ?: "")
+                        put("receivedBy", data["receivedBy"] as? String ?: "")
+
+                        // CRITICAL: Include the splits data
+                        val splits = data["splits"] as? Map<String, Any>
+                        if (splits != null) {
+                            put("splits", splits)
+                        }
+                    }
+                }
             }
 
         db.collection("groups").document(groupId)
@@ -136,34 +167,8 @@ fun SettleUpScreen(
             return@remember SettleUpState(isLoading = false)
         }
 
-        val finalBalances = mutableMapOf<String, Double>()
-        allMembers.forEach { member ->
-            finalBalances[member["id"]!!] = 0.0
-        }
-
-        allExpenses.forEach { expense ->
-            val amount = (expense["amount"] as? Number)?.toDouble() ?: 0.0
-            val paidBy = expense["paidBy"] as? String
-            val receivedBy = expense["receivedBy"] as? String
-            val type = expense["type"] as? String ?: "expense"
-
-            if (type == "settle") {
-                if (paidBy != null && receivedBy != null) {
-                    finalBalances[paidBy] = (finalBalances[paidBy] ?: 0.0) + amount
-                    finalBalances[receivedBy] = (finalBalances[receivedBy] ?: 0.0) - amount
-                }
-            } else {
-                if (paidBy != null) {
-                    val share = amount / allMembers.size
-                    finalBalances[paidBy] = (finalBalances[paidBy] ?: 0.0) + (amount - share)
-                    allMembers.forEach { member ->
-                        if (member["id"] != paidBy) {
-                            finalBalances[member["id"]!!] = (finalBalances[member["id"]!!] ?: 0.0) - share
-                        }
-                    }
-                }
-            }
-        }
+        // CORRECTED: Use the same ExpenseUtils function that's used in GroupDetailScreen
+        val finalBalances = ExpenseUtils.calculateBalances(allMembers, allExpenses)
 
         val debtors = finalBalances.filter { it.value < -0.01 }.toMutableMap()
         val creditors = finalBalances.filter { it.value > 0.01 }.toMutableMap()

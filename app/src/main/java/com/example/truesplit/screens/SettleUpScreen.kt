@@ -72,7 +72,6 @@ fun SettleUpScreen(
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
     val currentUserId = auth.currentUser?.uid ?: return
-    var currentUserName by remember { mutableStateOf("You") }
 
     var members by remember { mutableStateOf<List<Map<String, String>>?>(null) }
     var expenses by remember { mutableStateOf<List<Map<String, Any>>?>(null) }
@@ -80,19 +79,44 @@ fun SettleUpScreen(
     var transactionToPay by remember { mutableStateOf<SettlementTransaction?>(null) }
     var requestToConfirm by remember { mutableStateOf<SettleRequest?>(null) }
 
-    // Fetch current user's name from Firestore
-    LaunchedEffect(currentUserId) {
-        if (currentUserId.isNotBlank()) {
-            db.collection("users").document(currentUserId).get()
-                .addOnSuccessListener { document ->
-                    if (document.exists()) {
-                        currentUserName = document.getString("name") ?: "You"
-                    }
+    // Map to store user names from Firestore user profiles
+    val memberNames = remember { mutableStateMapOf<String, String>() }
+    var namesLoaded by remember { mutableStateOf(false) }
+
+    // Fetch all member names from Firestore user profiles
+    LaunchedEffect(members) {
+        members?.let { memberList ->
+            if (memberList.isNotEmpty() && memberNames.size < memberList.size) {
+                namesLoaded = false
+
+                // Fetch names for all members from user profiles
+                memberList.forEach { member ->
+                    val userId = member["id"] ?: return@forEach
+
+                    db.collection("users").document(userId).get()
+                        .addOnSuccessListener { document ->
+                            if (document.exists()) {
+                                document.getString("name")?.let { name ->
+                                    memberNames[userId] = name
+                                }
+                            }
+
+                            // Check if we've loaded all names
+                            if (memberNames.size == memberList.size) {
+                                namesLoaded = true
+                            }
+                        }
+                        .addOnFailureListener {
+                            Log.w("SettleUpScreen", "Failed to fetch user name for $userId")
+                            // Check if we've loaded all names (even if some failed)
+                            if (memberNames.size == memberList.size) {
+                                namesLoaded = true
+                            }
+                        }
                 }
-                .addOnFailureListener {
-                    // Use display name as fallback
-                    currentUserName = auth.currentUser?.displayName ?: "You"
-                }
+            } else if (memberList.isNotEmpty() && memberNames.size == memberList.size) {
+                namesLoaded = true
+            }
         }
     }
 
@@ -123,7 +147,6 @@ fun SettleUpScreen(
                     Log.e("SettleUpScreen", "Expenses listener error", it)
                     return@addSnapshotListener
                 }
-                // CORRECTED: Extract ALL necessary fields including splits
                 expenses = snapshot?.documents?.mapNotNull { d ->
                     val data = d.data ?: return@mapNotNull null
                     mutableMapOf<String, Any>().apply {
@@ -131,8 +154,6 @@ fun SettleUpScreen(
                         put("type", data["type"] as? String ?: "expense")
                         put("paidBy", data["paidBy"] as? String ?: "")
                         put("receivedBy", data["receivedBy"] as? String ?: "")
-
-                        // CRITICAL: Include the splits data
                         val splits = data["splits"] as? Map<String, Any>
                         if (splits != null) {
                             put("splits", splits)
@@ -156,18 +177,17 @@ fun SettleUpScreen(
             }
     }
 
-    val settleUpState = remember(members, expenses) {
+    val settleUpState = remember(members, expenses, memberNames, namesLoaded) {
         val allMembers = members
         val allExpenses = expenses
 
-        if (allMembers == null || allExpenses == null) {
+        if (allMembers == null || allExpenses == null || !namesLoaded) {
             return@remember SettleUpState(isLoading = true)
         }
         if (allMembers.size < 2) {
             return@remember SettleUpState(isLoading = false)
         }
 
-        // CORRECTED: Use the same ExpenseUtils function that's used in GroupDetailScreen
         val finalBalances = ExpenseUtils.calculateBalances(allMembers, allExpenses)
 
         val debtors = finalBalances.filter { it.value < -0.01 }.toMutableMap()
@@ -180,8 +200,9 @@ fun SettleUpScreen(
 
             val transferAmount = min(creditorAmount, debtorAmount.absoluteValue)
 
-            val debtorName = allMembers.find { it["id"] == debtorId }?.get("name") ?: "Unknown"
-            val creditorName = allMembers.find { it["id"] == creditorId }?.get("name") ?: "Unknown"
+            // Get names from our memberNames map which has names from user profiles
+            val debtorName = memberNames[debtorId] ?: "Unknown"
+            val creditorName = memberNames[creditorId] ?: "Unknown"
 
             allSettlements.add(SettlementTransaction(
                 fromId = debtorId,
@@ -295,6 +316,9 @@ fun SettleUpScreen(
             transaction = transaction,
             onDismiss = { transactionToPay = null },
             onConfirm = { amountToPay ->
+                // Use current user's name from our memberNames map
+                val currentUserName = memberNames[currentUserId] ?: "You"
+
                 val payRequest = SettleRequest(
                     groupId = groupId,
                     fromId = currentUserId,

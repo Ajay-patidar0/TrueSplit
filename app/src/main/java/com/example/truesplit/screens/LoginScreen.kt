@@ -31,8 +31,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 @Composable
-fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
-
+fun LoginScreen(
+    navController: NavController,
+    auth: FirebaseAuth = FirebaseAuth.getInstance(),
+) {
     val context = LocalContext.current
     val db = FirebaseFirestore.getInstance()
     val coroutineScope = rememberCoroutineScope()
@@ -45,13 +47,11 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
         GoogleSignIn.getClient(context, gso)
     }
 
-    // This is the new, robust, and crash-proof Google Sign-In handler.
     val googleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            // This will throw an ApiException if the sign-in fails or is cancelled.
             val account = task.getResult(ApiException::class.java)!!
             val idToken = account.idToken!!
             val credential = GoogleAuthProvider.getCredential(idToken, null)
@@ -64,18 +64,10 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
                     val userDoc = userDocRef.get().await()
 
                     if (userDoc.exists()) {
-                        // User document already exists, navigate to the main screen.
                         navController.navigate("groups") {
                             popUpTo("login") { inclusive = true }
                         }
                     } else {
-                        // This is a new user. Create their document and navigate to profile setup.
-                        val newUser = hashMapOf(
-                            "email" to user.email,
-                            "name" to user.displayName,
-                            "uid" to user.uid
-                        )
-                        userDocRef.set(newUser).await()
                         navController.navigate("profileSetup") {
                             popUpTo("login") { inclusive = true }
                         }
@@ -85,7 +77,6 @@ fun LoginScreen(navController: NavController, auth: FirebaseAuth) {
                 }
             }
         } catch (e: ApiException) {
-            // Handle all Google Sign-In errors gracefully instead of crashing.
             Toast.makeText(context, "Google Sign-In failed. Please try again.", Toast.LENGTH_SHORT).show()
         }
     }

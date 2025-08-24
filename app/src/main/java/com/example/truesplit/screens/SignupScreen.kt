@@ -7,8 +7,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.truesplit.R
 import com.google.android.gms.auth.api.signin.*
+import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
@@ -41,32 +40,48 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
         GoogleSignIn.getClient(context, gso)
     }
 
+    var googleSignInError by remember { mutableStateOf("") }
+
     val googleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            val account = task.result
+            val account = task.getResult(ApiException::class.java)
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
-            auth.signInWithCredential(credential).addOnCompleteListener {
-                if (it.isSuccessful) {
+            auth.signInWithCredential(credential).addOnCompleteListener { authTask ->
+                if (authTask.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
+                    // Check if user document exists in Firestore
                     db.collection("users").document(userId).get()
-                        .addOnSuccessListener { doc ->
-                            if (doc.exists()) {
+                        .addOnSuccessListener { document ->
+                            if (document.exists()) {
+                                // User exists, navigate to home and clear the entire auth stack
                                 navController.navigate("home") {
-                                    popUpTo("signup") { inclusive = true }
+                                    popUpTo("auth") { inclusive = true }
+                                    launchSingleTop = true
                                 }
                             } else {
+                                // New user, navigate to profile setup and clear the entire auth stack
                                 navController.navigate("profileSetup") {
-                                    popUpTo("signup") { inclusive = true }
+                                    popUpTo("auth") { inclusive = true }
+                                    launchSingleTop = true
                                 }
                             }
                         }
+                        .addOnFailureListener {
+                            // If there's an error checking the document, still navigate to profile setup
+                            navController.navigate("profileSetup") {
+                                popUpTo("auth") { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                } else {
+                    googleSignInError = "Google sign-in failed. Please try again."
                 }
             }
-        } catch (_: Exception) {
-            // Ignore silently
+        } catch (e: ApiException) {
+            googleSignInError = "Google sign-in failed. Please try again."
         }
     }
 
@@ -148,8 +163,10 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
                             .addOnCompleteListener { task ->
                                 isLoading = false
                                 if (task.isSuccessful) {
+                                    // Navigate to profile setup and clear the entire auth stack
                                     navController.navigate("profileSetup") {
-                                        popUpTo("signup") { inclusive = true }
+                                        popUpTo("auth") { inclusive = true }
+                                        launchSingleTop = true
                                     }
                                 } else {
                                     val msg = task.exception?.localizedMessage ?: ""
@@ -181,6 +198,7 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
 
         OutlinedButton(
             onClick = {
+                googleSignInError = ""
                 val signInIntent = googleSignInClient.signInIntent
                 googleLauncher.launch(signInIntent)
             },
@@ -212,9 +230,25 @@ fun SignupScreen(navController: NavController, auth: FirebaseAuth) {
             )
         }
 
+        if (googleSignInError.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = googleSignInError,
+                color = Color.Red,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         Spacer(modifier = Modifier.weight(1f))
 
-        TextButton(onClick = { navController.navigate("login") }) {
+        TextButton(onClick = {
+            navController.navigate("login") {
+                // Replace the current signup screen with login screen
+                popUpTo("signup") { inclusive = true }
+                launchSingleTop = true
+            }
+        }) {
             Text("Already have an account? Login", color = Color(0xFF2C5A8C))
         }
     }

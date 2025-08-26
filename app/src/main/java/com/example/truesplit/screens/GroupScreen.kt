@@ -126,22 +126,35 @@ fun GroupScreen(
                 val expenseListener = db.collection("groups")
                     .document(group.id)
                     .collection("expenses")
-                    .addSnapshotListener { expenseSnap, _ ->
+                    .addSnapshotListener { expenseSnap, expenseError ->
+                        if (expenseError != null) {
+                            Log.e("GroupScreen", "Expense listener error", expenseError)
+                            return@addSnapshotListener
+                        }
                         if (expenseSnap == null) return@addSnapshotListener
 
-                        val transactions = expenseSnap.documents.map { d ->
-                            mapOf(
-                                "amount" to (d.getDouble("amount") ?: 0.0),
-                                "type" to (d.getString("type") ?: "expense"),
-                                "paidBy" to (d.getString("paidBy") ?: ""),
-                                "receivedBy" to (d.getString("receivedBy") ?: "")
-                            )
+                        // CORRECTED: Extract ALL necessary fields including splits
+                        val transactions = expenseSnap.documents.mapNotNull { d ->
+                            val data = d.data ?: return@mapNotNull null
+                            mutableMapOf<String, Any>().apply {
+                                put("amount", data["amount"] as? Number ?: 0.0)
+                                put("type", data["type"] as? String ?: "expense")
+                                put("paidBy", data["paidBy"] as? String ?: "")
+                                put("receivedBy", data["receivedBy"] as? String ?: "")
+
+                                // CRITICAL: Include the splits data
+                                val splits = data["splits"] as? Map<String, Any>
+                                if (splits != null) {
+                                    put("splits", splits)
+                                }
+                            }
                         }
 
                         val balances = ExpenseUtils.calculateBalances(group.members, transactions)
                         val userBalance = balances[userId] ?: 0.0
 
-                        groups = fetchedGroups.map {
+                        // Update the specific group's balance
+                        groups = groups.map {
                             if (it.id == group.id) it.copy(balance = userBalance) else it
                         }.sortedBy { it.name }
 
@@ -149,6 +162,10 @@ fun GroupScreen(
                     }
                 groupListeners.add(expenseListener)
             }
+
+            // Initialize groups with their current state
+            groups = fetchedGroups.sortedBy { it.name }
+            isLoading = false
         }
 
         onDispose {
@@ -158,14 +175,14 @@ fun GroupScreen(
     }
 
     // ===================== Settle requests listener =====================
-    var showReminderDialog by remember { mutableStateOf<Pair<String, Double>?>(null) }
+    var showReminderDialog by remember { mutableStateOf<SettleRequest?>(null) }
     var currentPaymentRequest by remember { mutableStateOf<SettleRequest?>(null) }
     var currentRequestId by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(userId) {
-        db.collection("settle_requests")
-            .whereEqualTo("toId", userId)           // listen requests targeted to this user
-            .whereEqualTo("status", "pending")      // only pending
+    DisposableEffect(userId) {
+        val requestListener = db.collection("settle_requests")
+            .whereEqualTo("toId", userId) // Only listen for requests sent TO current user
+            .whereEqualTo("status", "pending")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e("GroupScreen", "Settle requests listener error", error)
@@ -174,48 +191,49 @@ fun GroupScreen(
 
                 snapshot?.documentChanges?.forEach { change ->
                     val docId = change.document.id
-
-                    // Ignore if we've already processed this request in this session
                     if (docId in processedRequestIds) return@forEach
 
-                    if (change.type == DocumentChange.Type.ADDED) {
-                        val request = change.document.toObject<SettleRequest>() ?: return@forEach
+                    val request = change.document.toObject<SettleRequest>()
+                    if (request.status != "pending") {
+                        processedRequestIds.add(docId)
+                        return@forEach
+                    }
 
-                        // Only act on pending requests (extra safety)
-                        if (request.status != "pending") {
-                            processedRequestIds.add(docId)
-                            return@forEach
-                        }
+                    when (request.requestType) {
+                        "reminder" -> {
+                            // Only show reminders sent TO me (userId) FROM others
+                            if (request.toId == userId && request.fromId != userId) {
+                                showReminderDialog = request
+                                processedRequestIds.add(docId)
 
-                        when (request.requestType) {
-                            "reminder" -> {
-                                // show a one-time reminder dialog
-                                showReminderDialog = request.fromName to request.amount
-
-                                // mark as seen so it won't show again (and add to processed ids)
+                                // Mark as seen in Firestore
                                 db.collection("settle_requests").document(docId)
-                                    .update(mapOf("status" to "seen"))
-                                    .addOnSuccessListener { processedRequestIds.add(docId) }
-                                    .addOnFailureListener {
-                                        // even if update fails, add to processed so we don't spam the UI repeatedly
-                                        processedRequestIds.add(docId)
+                                    .update("status", "seen")
+                                    .addOnFailureListener { e ->
+                                        Log.e("GroupScreen", "Error updating reminder status", e)
                                     }
                             }
-                            "payment_confirmation" -> {
-                                // keep request object & id in state so user can Accept/Reject
+                        }
+                        "payment_confirmation" -> {
+                            // Only show payment confirmations intended for current user
+                            if (request.toId == userId) {
                                 currentPaymentRequest = request
                                 currentRequestId = docId
-                                // mark as "notified" in memory so the ADDED handler won't re-show (but keep status pending until accept/reject)
                                 processedRequestIds.add(docId)
                             }
-                            else -> {
-                                // unknown type: mark processed
-                                processedRequestIds.add(docId)
-                            }
+                        }
+                        else -> {
+                            // Handle unknown request types
+                            processedRequestIds.add(docId)
+                            Log.w("GroupScreen", "Unknown request type: ${request.requestType}")
                         }
                     }
                 }
             }
+
+        onDispose {
+            requestListener.remove()
+        }
     }
 
     // ===================== UI =====================
@@ -282,7 +300,7 @@ fun GroupScreen(
                     item {
                         Column(
                             modifier = Modifier
-                                .fillMaxSize()
+                                .fillParentMaxSize()
                                 .padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
@@ -300,7 +318,11 @@ fun GroupScreen(
                     }
                 } else {
                     items(groups, key = { it.id }) { group ->
-                        GroupCard(group = group, onCardClick = { navToDetails(group.id) })
+                        GroupCard(
+                            group = group,
+                            onCardClick = { navToDetails(group.id) },
+                            showBalance = true // Always show balance for all groups
+                        )
                     }
                 }
             }
@@ -323,6 +345,10 @@ fun GroupScreen(
                     "memberIds" to listOf(userId)
                 )
                 db.collection("groups").add(group)
+                    .addOnFailureListener { e ->
+                        Toast.makeText(context, "Failed to create group", Toast.LENGTH_SHORT).show()
+                        Log.e("GroupScreen", "Error creating group", e)
+                    }
                 showDialog = false
             }
         )
@@ -330,13 +356,17 @@ fun GroupScreen(
 
     // ===================== Reminder dialog UI =====================
     if (showReminderDialog != null) {
-        val (fromName, amount) = showReminderDialog!!
+        val request = showReminderDialog!!
         AlertDialog(
             onDismissRequest = { showReminderDialog = null },
-            title = { Text("Reminder") },
-            text = { Text("$fromName reminded you to settle ₹$amount") },
+            title = { Text("Reminder from ${request.fromName}") },
+            text = {
+                Text("${request.fromName} reminded you to settle ${formatCurrency(request.amount)}")
+            },
             confirmButton = {
-                TextButton(onClick = { showReminderDialog = null }) {
+                TextButton(onClick = {
+                    showReminderDialog = null
+                }) {
                     Text("OK")
                 }
             }
@@ -348,60 +378,73 @@ fun GroupScreen(
         val req = currentPaymentRequest!!
         AlertDialog(
             onDismissRequest = {
-                // allow user to dismiss without changing request; remove in-memory reference
                 currentPaymentRequest = null
                 currentRequestId = null
             },
-            title = { Text("Settle Up Request") },
-            text = { Text("${req.fromName} wants you to confirm payment of ₹${req.amount}") },
+            title = { Text("Settle Up Request from ${req.fromName}") },
+            text = {
+                Column {
+                    Text("${req.fromName} wants you to confirm payment of ${formatCurrency(req.amount)}")
+                    Text("This will record the settlement in your group")
+                }
+            },
             confirmButton = {
-                TextButton(onClick = {
-                    // create a "settle" expense (title included) so SettleUpScreen / ExpenseUtils pick it up correctly
-                    val settleExpense = hashMapOf(
-                        "title" to "Settlement from ${req.fromName}",
-                        "amount" to req.amount,
-                        "type" to "settle",           // use "settle" to match SettleUpScreen logic
-                        "paidBy" to req.fromId,
-                        "receivedBy" to userId,
-                        "timestamp" to Timestamp.now()
-                    )
+                Button(
+                    onClick = {
+                        val settleExpense = hashMapOf(
+                            "title" to "Settlement from ${req.fromName}",
+                            "amount" to req.amount,
+                            "type" to "settle",
+                            "paidBy" to req.fromId,
+                            "receivedBy" to userId,
+                            "timestamp" to Timestamp.now()
+                        )
 
-                    db.collection("groups")
-                        .document(req.groupId)
-                        .collection("expenses")
-                        .add(settleExpense)
-                        .addOnSuccessListener {
-                            // mark request completed so it's not shown again
-                            db.collection("settle_requests")
-                                .document(currentRequestId!!)
-                                .update(mapOf("status" to "completed"))
-                                .addOnSuccessListener {
-                                    Toast.makeText(context, "Payment accepted and settlement added", Toast.LENGTH_SHORT).show()
-                                }
-                            currentPaymentRequest = null
-                            currentRequestId = null
-                        }
-                        .addOnFailureListener { ex ->
-                            Log.e("GroupScreen", "Failed to add settlement expense", ex)
-                            Toast.makeText(context, "Failed to accept payment", Toast.LENGTH_SHORT).show()
-                        }
-                }) { Text("Accept") }
+                        db.collection("groups")
+                            .document(req.groupId)
+                            .collection("expenses")
+                            .add(settleExpense)
+                            .addOnSuccessListener {
+                                db.collection("settle_requests")
+                                    .document(currentRequestId!!)
+                                    .update(mapOf("status" to "completed"))
+                                    .addOnSuccessListener {
+                                        Toast.makeText(context, "Payment accepted and settlement added", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .addOnFailureListener { e ->
+                                        Log.e("GroupScreen", "Error updating request status", e)
+                                        Toast.makeText(context, "Payment accepted but status update failed", Toast.LENGTH_SHORT).show()
+                                    }
+                                currentPaymentRequest = null
+                                currentRequestId = null
+                            }
+                            .addOnFailureListener { ex ->
+                                Log.e("GroupScreen", "Failed to add settlement expense", ex)
+                                Toast.makeText(context, "Failed to accept payment", Toast.LENGTH_SHORT).show()
+                            }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C))
+                ) {
+                    Text("Accept", color = Color.White)
+                }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    // Reject the request explicitly
                     db.collection("settle_requests")
                         .document(currentRequestId!!)
                         .update(mapOf("status" to "rejected"))
                         .addOnSuccessListener {
                             Toast.makeText(context, "Payment rejected", Toast.LENGTH_SHORT).show()
                         }
-                        .addOnFailureListener {
-                            Toast.makeText(context, "Failed to reject", Toast.LENGTH_SHORT).show()
+                        .addOnFailureListener { e ->
+                            Log.e("GroupScreen", "Error rejecting payment", e)
+                            Toast.makeText(context, "Failed to reject payment", Toast.LENGTH_SHORT).show()
                         }
                     currentPaymentRequest = null
                     currentRequestId = null
-                }) { Text("Reject") }
+                }) {
+                    Text("Reject")
+                }
             }
         )
     }
@@ -411,6 +454,7 @@ fun GroupScreen(
 private fun GroupCard(
     group: GroupData,
     onCardClick: () -> Unit,
+    showBalance: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val currencyFormat = remember { NumberFormat.getCurrencyInstance(Locale("en", "IN")) }
@@ -452,15 +496,19 @@ private fun GroupCard(
                     color = Color(0xFF3A3A3A),
                     fontWeight = FontWeight.SemiBold
                 )
-                Row {
-                    val balance = group.balance
-                    if (balance.absoluteValue > 0.01) {
-                        val (text, color) = if (balance > 0) {
-                            "You are owed ${currencyFormat.format(balance)}" to Color(0xFF34A853)
+                if (showBalance) {
+                    Row {
+                        val balance = group.balance
+                        if (balance.absoluteValue > 0.01) {
+                            val (text, color) = if (balance > 0) {
+                                "You are owed ${currencyFormat.format(balance)}" to Color(0xFF34A853)
+                            } else {
+                                "You owe ${currencyFormat.format(balance.absoluteValue)}" to Color(0xFFEA4335)
+                            }
+                            Text(text = text, fontSize = 13.sp, color = color)
                         } else {
-                            "You owe ${currencyFormat.format(balance.absoluteValue)}" to Color(0xFFEA4335)
+                            Text("All settled up", fontSize = 13.sp, color = Color(0xFF7D7D7D))
                         }
-                        Text(text = text, fontSize = 13.sp, color = color)
                     }
                 }
             }
@@ -540,4 +588,8 @@ fun CreateGroupDialog(
         shape = RoundedCornerShape(25.dp),
         containerColor = Color.White
     )
+}
+
+private fun formatCurrency(amount: Double): String {
+    return NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(amount)
 }

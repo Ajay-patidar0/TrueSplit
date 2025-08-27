@@ -52,6 +52,9 @@ fun GroupDetailScreen(
     var groupColor by remember { mutableStateOf(Color.Gray) }
     var members by remember { mutableStateOf(listOf<Map<String, String>>()) }
 
+    // Map to store user names fetched from Firestore
+    val memberNames = remember { mutableStateMapOf<String, String>() }
+
     var allTransactions by remember { mutableStateOf(listOf<Map<String, Any>>()) }
     val expensesOnly = remember(allTransactions) {
         allTransactions.filter { it["type"] != "settle" }
@@ -66,6 +69,21 @@ fun GroupDetailScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showLeaveConfirm by remember { mutableStateOf(false) }
     var selectedTabIndex by remember { mutableStateOf(0) }
+
+    // Fetch member names from Firestore
+    LaunchedEffect(members) {
+        members.forEach { member ->
+            val userId = member["id"] ?: return@forEach
+            if (userId !in memberNames) {
+                db.collection("users").document(userId).get()
+                    .addOnSuccessListener { document ->
+                        document.getString("name")?.let { name ->
+                            memberNames[userId] = name
+                        }
+                    }
+            }
+        }
+    }
 
     LaunchedEffect(groupId) {
         db.collection("groups").document(groupId).addSnapshotListener { snapshot, _ ->
@@ -94,7 +112,6 @@ fun GroupDetailScreen(
             }
     }
 
-    // This calculation is now used for the user's balance and all safety checks.
     val groupBalances = remember(allTransactions, members) {
         ExpenseUtils.calculateBalances(members, allTransactions)
     }
@@ -119,7 +136,6 @@ fun GroupDetailScreen(
                             Icon(Icons.Default.Delete, contentDescription = "Delete Group")
                         }
                     } else {
-                        // The "Leave Group" button is only shown if the user's balance is zero.
                         if (userBalance.absoluteValue < 0.01) {
                             IconButton(onClick = { showLeaveConfirm = true }) {
                                 Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Leave Group")
@@ -155,7 +171,7 @@ fun GroupDetailScreen(
             }
 
             item {
-                MembersCard(members = members)
+                MembersCard(members = members, memberNames = memberNames)
             }
 
             stickyHeader {
@@ -190,7 +206,7 @@ fun GroupDetailScreen(
                 items(listToDisplay, key = { it["timestamp"].toString() }) { transaction ->
                     TransactionListItem(
                         transaction = transaction,
-                        members = members,
+                        memberNames = memberNames,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
@@ -222,7 +238,6 @@ fun GroupDetailScreen(
         ConfirmActionDialog(
             onDismiss = { showLeaveConfirm = false },
             onConfirm = {
-                // Safety check: The user's balance must be zero to leave.
                 if (userBalance.absoluteValue < 0.01) {
                     val updatedMembers = members.filter { it["id"] != currentUserId }
                     val updatedMemberIds = members.mapNotNull { it["id"] }.filter { it != currentUserId }
@@ -292,7 +307,7 @@ fun OverallBalanceCard(balance: Double) {
 }
 
 @Composable
-fun MembersCard(members: List<Map<String, String>>) {
+fun MembersCard(members: List<Map<String, String>>, memberNames: Map<String, String>) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
@@ -318,13 +333,17 @@ fun MembersCard(members: List<Map<String, String>>) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = (member["name"] ?: "?").take(1).uppercase(),
+                                text = (memberNames[member["id"]] ?: "?").take(1).uppercase(),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(text = member["name"] ?: "Unknown", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                        Text(
+                            text = memberNames[member["id"]] ?: "Unknown",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1
+                        )
                     }
                 }
             }
@@ -335,19 +354,19 @@ fun MembersCard(members: List<Map<String, String>>) {
 @Composable
 private fun TransactionListItem(
     transaction: Map<String, Any>,
-    members: List<Map<String, String>>,
+    memberNames: Map<String, String>,
     modifier: Modifier = Modifier
 ) {
     val title = transaction["title"] as? String ?: "Untitled"
     val amount = (transaction["amount"] as? Number)?.toDouble() ?: 0.0
     val paidById = transaction["paidBy"] as? String ?: ""
-    val paidByName = members.find { it["id"] == paidById }?.get("name") ?: "Unknown"
+    val paidByName = memberNames[paidById] ?: "Unknown"
     val type = transaction["type"] as? String ?: "expense"
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("en", "IN"))
 
     val (icon, subtitle, amountColor) = if (type == "settle") {
         val receivedById = transaction["receivedBy"] as? String ?: ""
-        val receivedByName = members.find { it["id"] == receivedById }?.get("name") ?: "Unknown"
+        val receivedByName = memberNames[receivedById] ?: "Unknown"
         Triple(Icons.Outlined.CheckCircle, "$paidByName paid $receivedByName", Color(0xFF2E7D32))
     } else {
         val categoryIcon = when {

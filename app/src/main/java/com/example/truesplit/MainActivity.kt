@@ -127,7 +127,8 @@ class MainActivity : ComponentActivity() {
                         ProfileSetupScreen(
                             navToHome = {
                                 navController.navigate("groups") {
-                                    popUpTo("profileSetup") { inclusive = true }
+                                    // Clear the entire auth stack including login/signup/profileSetup
+                                    popUpTo(0) { inclusive = true }
                                 }
                             },
                             auth = auth
@@ -219,7 +220,8 @@ class MainActivity : ComponentActivity() {
                     if (info != null && auth.currentUser != null && isProfileComplete) {
                         val (groupId, _) = info
                         navController.navigate("groupDetail/$groupId") {
-                            popUpTo("groups") { inclusive = false }
+                            // Clear the entire back stack and start fresh
+                            popUpTo(0) { inclusive = true }
                             launchSingleTop = true
                         }
                         onReminderHandled()
@@ -239,7 +241,9 @@ class MainActivity : ComponentActivity() {
                                 val canNavigate = joinGroup(groupId, groupName, snackbarHostState)
                                 if (canNavigate) {
                                     navController.navigate("groupDetail/$groupId") {
-                                        popUpTo("groups") { inclusive = true }
+                                        // Clear the entire back stack and start fresh
+                                        popUpTo(0) { inclusive = true }
+                                        launchSingleTop = true
                                     }
                                 }
                             }

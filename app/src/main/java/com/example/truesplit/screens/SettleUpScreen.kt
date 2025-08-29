@@ -314,6 +314,7 @@ fun SettleUpScreen(
     transactionToPay?.let { transaction ->
         RequestPaymentDialog(
             transaction = transaction,
+            groupName = groupName, // Pass group name to dialog
             onDismiss = { transactionToPay = null },
             onConfirm = { amountToPay ->
                 // Use current user's name from our memberNames map
@@ -356,7 +357,7 @@ fun SettleUpScreen(
             },
             title = { Text("Confirm Payment") },
             text = {
-                Text("Did you receive ${formatCurrency(request.amount)} from ${request.fromName}?")
+                Text("Did you receive ${formatCurrency(request.amount)} from ${request.fromName} in the group '$groupName'?")
             },
             confirmButton = {
                 Button(
@@ -501,6 +502,7 @@ private fun EmptyState(isOwedToUser: Boolean) {
 @Composable
 private fun RequestPaymentDialog(
     transaction: SettlementTransaction,
+    groupName: String, // Added parameter
     onDismiss: () -> Unit,
     onConfirm: (amountToPay: Double) -> Unit
 ) {
@@ -515,6 +517,9 @@ private fun RequestPaymentDialog(
         title = { Text("Request to Pay ${transaction.toName}") },
         text = {
             Column {
+                // Added group name information
+                Text("Group: $groupName", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
                 Text("Enter the amount you wish to pay. They will need to confirm this payment.", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(

@@ -376,6 +376,9 @@ fun GroupScreen(
     // ===================== Payment confirmation UI =====================
     if (currentPaymentRequest != null && currentRequestId != null) {
         val req = currentPaymentRequest!!
+        // Find the group name from the groups list
+        val groupName = groups.find { it.id == req.groupId }?.name ?: "the group"
+
         AlertDialog(
             onDismissRequest = {
                 currentPaymentRequest = null
@@ -384,7 +387,7 @@ fun GroupScreen(
             title = { Text("Settle Up Request from ${req.fromName}") },
             text = {
                 Column {
-                    Text("${req.fromName} wants you to confirm payment of ${formatCurrency(req.amount)}")
+                    Text("${req.fromName} wants you to confirm payment of ${formatCurrency(req.amount)} in the group '$groupName'")
                     Text("This will record the settlement in your group")
                 }
             },

@@ -48,9 +48,22 @@ fun AddExpenseScreen(
     val unequalAmounts = remember { mutableStateMapOf<String, String>() }
     var dropdownExpanded by remember { mutableStateOf(false) }
 
+    // Fetch user profile names from Firestore
+    val userProfileNames = remember { mutableStateMapOf<String, String>() }
+
     LaunchedEffect(Unit) {
         selectedMembers.clear()
         selectedMembers.addAll(groupMembers.map { it.first })
+
+        // Fetch profile names for all group members
+        groupMembers.forEach { (userId, defaultName, _) ->
+            db.collection("users").document(userId).get()
+                .addOnSuccessListener { document ->
+                    document.getString("name")?.let { name ->
+                        userProfileNames[userId] = name
+                    }
+                }
+        }
     }
 
     Scaffold(
@@ -152,6 +165,7 @@ fun AddExpenseScreen(
                 value = title,
                 onValueChange = { title = it },
                 label = { Text("Expense Title") },
+                singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -161,13 +175,14 @@ fun AddExpenseScreen(
                 value = amount,
                 onValueChange = { amount = it },
                 label = { Text("Total Amount") },
+                singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(Modifier.height(16.dp))
 
             val paidByDisplayName = if (paidBy == currentUserId) "Me"
-            else groupMembers.find { it.first == paidBy }?.second ?: "Select"
+            else userProfileNames[paidBy] ?: groupMembers.find { it.first == paidBy }?.second ?: "Select"
 
             ExposedDropdownMenuBox(
                 expanded = dropdownExpanded,
@@ -182,7 +197,8 @@ fun AddExpenseScreen(
                     trailingIcon = {
                         ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
                     },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    singleLine = true
                 )
 
                 ExposedDropdownMenu(
@@ -198,11 +214,12 @@ fun AddExpenseScreen(
                     )
                     groupMembers
                         .filter { it.first != currentUserId }
-                        .forEach { (id, name, _) ->
+                        .forEach { member ->
+                            val profileName = userProfileNames[member.first] ?: member.second
                             DropdownMenuItem(
-                                text = { Text(name) },
+                                text = { Text(profileName) },
                                 onClick = {
-                                    paidBy = id
+                                    paidBy = member.first
                                     dropdownExpanded = false
                                 }
                             )
@@ -231,7 +248,8 @@ fun AddExpenseScreen(
 
             Text("Select Members Involved", fontWeight = FontWeight.SemiBold)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(groupMembers) { (id, name, email) ->
+                items(groupMembers) { (id, defaultName, email) ->
+                    val profileName = userProfileNames[id] ?: defaultName
                     val isChecked = selectedMembers.contains(id)
                     val total = amount.toDoubleOrNull() ?: 0.0
                     val perPerson = if (splitType == "equal" && selectedMembers.isNotEmpty()) {
@@ -262,11 +280,11 @@ fun AddExpenseScreen(
                                         .background(Color(0xFF2C5A8C)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(name.first().toString(), color = Color.White)
+                                    Text(profileName.first().toString(), color = Color.White)
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(name, fontWeight = FontWeight.Bold)
+                                    Text(profileName, fontWeight = FontWeight.Bold)
                                     Text(email, fontSize = 12.sp, color = Color.Gray)
                                 }
                                 Checkbox(
@@ -288,7 +306,8 @@ fun AddExpenseScreen(
                                 OutlinedTextField(
                                     value = unequalAmounts[id] ?: "",
                                     onValueChange = { unequalAmounts[id] = it },
-                                    label = { Text("₹ Amount for $name") },
+                                    label = { Text("₹ Amount for $profileName") },
+                                    singleLine = true,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 16.dp, vertical = 8.dp)

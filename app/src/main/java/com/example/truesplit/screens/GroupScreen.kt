@@ -291,10 +291,10 @@ fun GroupScreen(
         } else {
             LazyColumn(
                 contentPadding = padding,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = if (groups.isEmpty()) Arrangement.Center else Arrangement.Top,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = 24.dp, bottom = 80.dp)
+                    .background(Color(0xFFF8F9FB))
             ) {
                 if (groups.isEmpty()) {
                     item {
@@ -331,7 +331,9 @@ fun GroupScreen(
 
     // ===================== Create group dialog =====================
     if (showDialog) {
+        val existingGroupNames = remember(groups) { groups.map { it.name } }
         CreateGroupDialog(
+            existingGroupNames = existingGroupNames,
             onDismiss = { showDialog = false },
             onCreate = { name, color ->
                 val group = hashMapOf(
@@ -468,7 +470,7 @@ private fun GroupCard(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
             .clickable(onClick = onCardClick)
     ) {
         Row(
@@ -528,13 +530,29 @@ private fun GroupCard(
 
 @Composable
 fun CreateGroupDialog(
+    existingGroupNames: List<String>,
     onDismiss: () -> Unit,
     onCreate: (String, String) -> Unit
 ) {
     var groupName by remember { mutableStateOf("") }
     var selectedColor by remember { mutableStateOf("#6CB4C9") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val colors = listOf("#6CB4C9", "#2C5A8C", "#FBBC05", "#EA4335", "#34A853")
+
+    // Validate group name on change
+    LaunchedEffect(groupName) {
+        errorMessage = if (groupName.isNotBlank()) {
+            val trimmedName = groupName.trim()
+            if (existingGroupNames.any { it.equals(trimmedName, ignoreCase = true) }) {
+                "Group name already exists"
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -547,7 +565,9 @@ fun CreateGroupDialog(
                     placeholder = { Text("Group Name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(15.dp)
+                    shape = RoundedCornerShape(15.dp),
+                    isError = errorMessage != null,
+                    supportingText = { errorMessage?.let { Text(it) } }
                 )
                 Spacer(Modifier.size(16.dp))
                 Text("Select Icon Color", color = Color(0xFF3A3A3A))
@@ -573,10 +593,11 @@ fun CreateGroupDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (groupName.isNotBlank()) {
+                    if (groupName.isNotBlank() && errorMessage == null) {
                         onCreate(groupName.trim(), selectedColor)
                     }
                 },
+                enabled = groupName.isNotBlank() && errorMessage == null,
                 shape = RoundedCornerShape(15.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C5A8C))
             ) {

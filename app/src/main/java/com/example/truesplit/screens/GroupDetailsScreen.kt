@@ -92,7 +92,11 @@ fun GroupDetailScreen(
             .collection("expenses")
             .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, _ ->
-                allTransactions = snapshot?.documents?.mapNotNull { it.data } ?: emptyList()
+                allTransactions = snapshot?.documents?.mapNotNull { doc ->
+                    doc.data?.toMutableMap()?.apply {
+                        put("documentId", doc.id)
+                    }
+                } ?: emptyList()
             }
     }
 
@@ -208,8 +212,12 @@ fun GroupDetailScreen(
                         modifier = Modifier
                             .padding(horizontal = 16.dp, vertical = 6.dp)
                             .clickable {
-                                // TODO: Navigate to detail screen later, pass doc id when you wire it
-                                // navController.navigate("expenseDetail/<docId>")
+                                if (transaction["type"] != "settle") {
+                                    val docId = transaction["documentId"] as? String
+                                    if (docId != null) {
+                                        navController.navigate("expenseDetail/$docId/$groupId")
+                                    }
+                                }
                             }
                     )
                 }

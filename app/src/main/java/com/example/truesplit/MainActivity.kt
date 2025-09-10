@@ -152,6 +152,22 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable(
+                        "expenseDetail/{expenseId}/{groupId}",
+                        arguments = listOf(
+                            navArgument("expenseId") { type = NavType.StringType },
+                            navArgument("groupId") { type = NavType.StringType }
+                        )
+                    ) { backStackEntry ->
+                        val expenseId = backStackEntry.arguments?.getString("expenseId") ?: ""
+                        val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                        ExpenseDetailScreen(
+                            expenseId = expenseId,
+                            groupId = groupId,
+                            navController = navController,
+                            navBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable(
                         "addExpense/{groupId}",
                         arguments = listOf(navArgument("groupId") { type = NavType.StringType })
                     ) { backStackEntry ->

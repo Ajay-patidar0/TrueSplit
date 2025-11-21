@@ -1,5 +1,5 @@
 [versions]
-agp = "8.11.1"
+agp = "8.13.0"
 androidSdk = "2.24.0"
 androidxActivityCompose = "1.8.2"
 kotlin = "2.0.21"
@@ -27,6 +27,7 @@ playServicesAuth = "20.7.0"
 sdkAndroid = "4.6.0"
 ui = "1.6.7"
 firebaseFirestore = "25.1.4"
+firebaseMessaging = "25.0.0"
 
 [libraries]
 android-sdk = { module = "co.ab180.airbridge:android-sdk", version.ref = "androidSdk" }
@@ -62,6 +63,7 @@ play-services-auth = { module = "com.google.android.gms:play-services-auth", ver
 sdk-android = { module = "io.airbridge:sdk-android", version.ref = "sdkAndroid" }
 ui = { module = "androidx.compose.ui:ui", version.ref = "ui" }
 firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore", version.ref = "firebaseFirestore" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging", version.ref = "firebaseMessaging" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

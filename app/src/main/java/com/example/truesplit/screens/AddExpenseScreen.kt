@@ -2,6 +2,7 @@
 
 package com.example.truesplit.screens
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -51,9 +52,24 @@ fun AddExpenseScreen(
     // Fetch user profile names from Firestore
     val userProfileNames = remember { mutableStateMapOf<String, String>() }
 
+    // MODIFIED: Added state for groupName
+    var groupName by remember { mutableStateOf("a group") }
+
     LaunchedEffect(Unit) {
         selectedMembers.clear()
         selectedMembers.addAll(groupMembers.map { it.first })
+
+        // MODIFIED: Fetch group name for activity log
+        db.collection("groups").document(groupId).get()
+            .addOnSuccessListener { document ->
+                document.getString("name")?.let { name ->
+                    groupName = name
+                }
+            }
+            .addOnFailureListener {
+                Log.w("AddExpenseScreen", "Failed to fetch group name", it)
+            }
+
 
         // Fetch profile names for all group members
         groupMembers.forEach { (userId, defaultName, _) ->
@@ -140,8 +156,39 @@ fun AddExpenseScreen(
                     db.collection("groups").document(groupId)
                         .collection("expenses")
                         .add(expense)
-                        .addOnSuccessListener {
-                            navController.popBackStack()
+                        .addOnSuccessListener { expenseRef ->
+                            // ================== NEW ACTIVITY LOGIC START ==================
+                            val newExpenseId = expenseRef.id
+                            val actorName = userProfileNames[currentUserId] ?: currentUser?.second ?: "Someone"
+                            val allGroupMemberIds = groupMembers.map { it.first } // All members for participants list
+                            val totalAmountInSubunits = (totalAmount * 100).toLong()
+
+                            val activity = hashMapOf(
+                                "type" to "EXPENSE_ADDED",
+                                "actorId" to currentUserId,
+                                "actorName" to actorName,
+                                "groupId" to groupId,
+                                "groupName" to groupName, // Use the fetched group name
+                                "relatedExpenseId" to newExpenseId,
+                                "relatedExpenseTitle" to title.trim(),
+                                "amount" to totalAmountInSubunits,
+                                "currencyCode" to "INR", // Assuming INR
+                                "timestampMillis" to System.currentTimeMillis(),
+                                "participants" to allGroupMemberIds // All group members
+                            )
+
+                            db.collection("activities").add(activity)
+                                .addOnSuccessListener {
+                                    Log.d("AddExpenseScreen", "Successfully created activity log")
+                                    navController.popBackStack() // Pop back on success
+                                }
+                                .addOnFailureListener { e ->
+                                    // Failed to create activity, but expense was added.
+                                    // Log it and pop back anyway.
+                                    Log.w("AddExpenseScreen", "Failed to create activity log", e)
+                                    navController.popBackStack()
+                                }
+                            // ================== NEW ACTIVITY LOGIC END ==================
                         }
                         .addOnFailureListener {
                             coroutineScope.launch {

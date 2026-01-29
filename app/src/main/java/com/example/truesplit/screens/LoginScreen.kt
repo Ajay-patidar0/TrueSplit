@@ -1,11 +1,13 @@
 package com.example.truesplit.screens
 
-import android.util.Patterns
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -15,8 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -39,6 +44,14 @@ fun LoginScreen(
     val db = FirebaseFirestore.getInstance()
     val coroutineScope = rememberCoroutineScope()
 
+    // Loading state
+    var isLoading by remember { mutableStateOf(false) }
+
+    // URL launcher for opening browser
+    val urlLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { }
+
     val googleSignInClient = remember {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestIdToken(context.getString(R.string.default_web_client_id))
@@ -57,161 +70,192 @@ fun LoginScreen(
             val credential = GoogleAuthProvider.getCredential(idToken, null)
 
             coroutineScope.launch {
+                isLoading = true
                 try {
                     auth.signInWithCredential(credential).await()
                     val user = auth.currentUser!!
                     val userDocRef = db.collection("users").document(user.uid)
                     val userDoc = userDocRef.get().await()
 
-                    if (userDoc.exists()) {
+                    // Check if user document exists and has required profile data
+                    if (userDoc.exists() && userDoc.contains("name") && userDoc.getString("name")?.isNotEmpty() == true) {
+                        // Existing user with complete profile - go to groups
                         navController.navigate("groups") {
                             popUpTo("login") { inclusive = true }
                         }
                     } else {
+                        // New user or incomplete profile - go to profile setup
                         navController.navigate("profileSetup") {
                             popUpTo("login") { inclusive = true }
                         }
                     }
                 } catch (e: Exception) {
                     Toast.makeText(context, "Authentication failed: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isLoading = false
                 }
             }
         } catch (e: ApiException) {
             Toast.makeText(context, "Google Sign-In failed. Please try again.", Toast.LENGTH_SHORT).show()
+            isLoading = false
         }
     }
-
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF8F9FB))
+            .background(Color.White)
             .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-
-        Spacer(modifier = Modifier.height(40.dp))
-
+        // Logo Section
         Image(
             painter = painterResource(id = R.drawable.bg_img),
-            contentDescription = "Login Image",
-            modifier = Modifier.size(160.dp)
+            contentDescription = "TrueSplit Logo",
+            modifier = Modifier.size(150.dp)
         )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("Welcome to TrueSplit", color = Color(0xFF2C5A8C), fontSize = 28.sp)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("Split expenses effortlessly", color = Color(0xFF7D7D7D), fontSize = 16.sp)
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        OutlinedTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Email", color = Color(0xFF7D7D7D)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(15.dp)
+        // Welcome Text
+        Text(
+            text = "Welcome to TrueSplit",
+            color = Color(0xFF2C5A8C),
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password", color = Color(0xFF7D7D7D)) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(15.dp)
+        Text(
+            text = "Split expenses with friends quickly and easily",
+            color = Color(0xFF666666),
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(48.dp))
 
+        // Benefits Section
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            BenefitItem("✓ Easy expense splitting")
+            BenefitItem("✓ Real-time balance tracking")
+            BenefitItem("✓ Secure and private")
+        }
+
+        Spacer(modifier = Modifier.height(64.dp))
+
+        // Google Sign-In Button
         Button(
             onClick = {
-                error = ""
-                when {
-                    email.isBlank() -> error = "Please enter your email."
-                    !Patterns.EMAIL_ADDRESS.matcher(email).matches() -> error = "Invalid email address."
-                    password.isBlank() -> error = "Please enter your password."
-                    else -> {
-                        isLoading = true
-                        auth.signInWithEmailAndPassword(email.trim(), password)
-                            .addOnCompleteListener { task ->
-                                isLoading = false
-                                if (task.isSuccessful) {
-                                    navController.navigate("groups") {
-                                        popUpTo("login") { inclusive = true }
-                                    }
-                                } else {
-                                    error = "Incorrect credentials. Please try again."
-                                }
-                            }
-                    }
+                if (!isLoading) {
+                    val signInIntent = googleSignInClient.signInIntent
+                    googleLauncher.launch(signInIntent)
                 }
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(15.dp),
+                .height(56.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF2C5A8C),
-                contentColor = Color.White
+                containerColor = Color.White,
+                contentColor = Color(0xFF757575)
+            ),
+            elevation = ButtonDefaults.buttonElevation(
+                defaultElevation = 2.dp,
+                pressedElevation = 4.dp,
+                disabledElevation = 1.dp
             ),
             enabled = !isLoading
         ) {
             if (isLoading) {
-                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = Color(0xFF757575)
+                )
             } else {
-                Text("Login")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.google_logo),
+                        contentDescription = "Google Logo",
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        "Continue with Google",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        OutlinedButton(
-            onClick = {
-                val signInIntent = googleSignInClient.signInIntent
-                googleLauncher.launch(signInIntent)
+        // Single clickable agreement text
+        Text(
+            text = buildAnnotatedString {
+                append("By continuing, you agree to our ")
+
+                withStyle(
+                    style = SpanStyle(
+                        color = Color(0xFF2C5A8C),
+                        fontWeight = FontWeight.Medium
+                    )
+                ) {
+                    append("Privacy Policy")
+                }
+
+                append(" and ")
+
+                withStyle(
+                    style = SpanStyle(
+                        color = Color(0xFF2C5A8C),
+                        fontWeight = FontWeight.Medium
+                    )
+                ) {
+                    append("Terms of Service")
+                }
             },
+            color = Color(0xFF666666),
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(15.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2C5A8C))
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    painter = painterResource(id = R.drawable.google_logo),
-                    contentDescription = "Google Logo",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Continue with Google")
-            }
-        }
+                .padding(horizontal = 16.dp)
+                .clickable {
+                    // Open Privacy Policy in browser
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://yoursite.com/privacy"))
+                    urlLauncher.launch(intent)
+                }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
 
-        TextButton(onClick = { navController.navigate("signup") }) {
-            Text("Don't have an account? Sign Up", color = Color(0xFF2C5A8C))
-        }
-
-        if (error.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+@Composable
+fun BenefitItem(text: String) {
+    Row(
+        modifier = Modifier.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            color = Color(0xFF444444),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }

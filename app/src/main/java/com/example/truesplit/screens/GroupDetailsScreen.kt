@@ -2,6 +2,7 @@ package com.example.truesplit.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -250,8 +251,32 @@ fun GroupDetailScreen(
             onDismiss = { showLeaveConfirm = false },
             onConfirm = {
                 if (userBalance.absoluteValue < 0.01) {
+                    // ================== NEW ACTIVITY LOGIC START ==================
+                    // Get all member IDs *before* leaving for the activity log
+                    val allMemberIds = members.mapNotNull { it["id"] }
+                    val actorName = currentUser?.displayName ?: "Unknown"
+
+                    // Create the activity log
+                    val activity = hashMapOf(
+                        "type" to "GROUP_MEMBER_REMOVED",
+                        "actorId" to currentUserId,
+                        "actorName" to actorName,
+                        "groupId" to groupId,
+                        "groupName" to groupName,
+                        "message" to "$actorName left the group '$groupName'",
+                        "timestampMillis" to System.currentTimeMillis(),
+                        "participants" to allMemberIds // Everyone in the group sees this
+                    )
+
+                    db.collection("activities").add(activity)
+                        .addOnFailureListener { e ->
+                            Log.w("GroupDetailScreen", "Failed to create 'member left' activity", e)
+                            // Don't block the user from leaving, just log the error
+                        }
+                    // ================== NEW ACTIVITY LOGIC END ==================
+
                     val updatedMembers = members.filter { it["id"] != currentUserId }
-                    val updatedMemberIds = members.mapNotNull { it["id"] }.filter { it != currentUserId }
+                    val updatedMemberIds = updatedMembers.mapNotNull { it["id"] } // Recalculate based on updated list
 
                     val task = if (updatedMembers.isEmpty()) {
                         db.collection("groups").document(groupId).delete()
@@ -612,9 +637,9 @@ private fun ShareInviteLinkDialog(
 /**
  * Returns a per-user share map (userId -> share amount) for an expense transaction.
  * Supports:
- *  - "splits": Map<userId, Number|Boolean>  (numbers treated as explicit amounts; booleans as inclusion flags)
- *  - "splitBetween": List<userId>
- *  - "splitWith": List<Map<String, Any>> containing "userId" and optional "amount"/"included"
+ * - "splits": Map<userId, Number|Boolean>  (numbers treated as explicit amounts; booleans as inclusion flags)
+ * - "splitBetween": List<userId>
+ * - "splitWith": List<Map<String, Any>> containing "userId" and optional "amount"/"included"
  */
 private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Double> {
     val amount = (tx["amount"] as? Number)?.toDouble() ?: 0.0
@@ -715,8 +740,8 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
 
 /**
  * Accurate group balances:
- *  - For each expense: participants only; per-user shares; payer credited with total paid.
- *  - For settlements: payer credited (+), receiver debited (-).
+ * - For each expense: participants only; per-user shares; payer credited with total paid.
+ * - For settlements: payer credited (+), receiver debited (-).
  * Positive balance => others owe this user.
  */
 private fun calculateGroupBalancesAccurate(

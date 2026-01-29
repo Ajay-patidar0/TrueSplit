@@ -84,38 +84,60 @@ fun SettleUpScreen(
     var namesLoaded by remember { mutableStateOf(false) }
 
     // Fetch all member names from Firestore user profiles
+    // MODIFIED: This logic is now robust against missing user profiles
     LaunchedEffect(members) {
         members?.let { memberList ->
-            if (memberList.isNotEmpty() && memberNames.size < memberList.size) {
-                namesLoaded = false
+            // Handle case with no members
+            if (memberList.isEmpty()) {
+                namesLoaded = true
+                return@let
+            }
 
-                // Fetch names for all members from user profiles
+            // Only fetch if names aren't already loaded or member list changed
+            if (!namesLoaded || memberNames.size < memberList.size) {
+                namesLoaded = false
+                var completedFetches = 0 // Use a counter
+
                 memberList.forEach { member ->
-                    val userId = member["id"] ?: return@forEach
+                    val userId = member["id"] ?: ""
+                    if (userId.isBlank()) {
+                        completedFetches++
+                        if (completedFetches == memberList.size) {
+                            namesLoaded = true
+                        }
+                        return@forEach
+                    }
 
                     db.collection("users").document(userId).get()
-                        .addOnSuccessListener { document ->
-                            if (document.exists()) {
-                                document.getString("name")?.let { name ->
-                                    memberNames[userId] = name
+                        .addOnCompleteListener { task -> // Use onCompleteListener
+                            completedFetches++ // Increment on success OR failure
+                            var addedName = false
+                            // ================== MODIFIED LOGIC START ==================
+                            if (task.isSuccessful && task.result?.exists() == true) {
+                                // Task succeeded AND document exists, try to get profile name
+                                val profileName = task.result?.getString("name")
+                                if (profileName != null && profileName.isNotBlank()) {
+                                    memberNames[userId] = profileName
+                                    addedName = true
                                 }
                             }
 
-                            // Check if we've loaded all names
-                            if (memberNames.size == memberList.size) {
-                                namesLoaded = true
+                            // If task failed OR doc doesn't exist OR profile name was blank/null, use fallback
+                            if (!addedName) {
+                                if (task.exception != null) {
+                                    Log.w("SettleUpScreen", "Failed to fetch user name for $userId", task.exception)
+                                }
+                                // Use the name stored in the group's 'members' array as fallback
+                                memberNames[userId] = member["name"] ?: "Unknown"
                             }
-                        }
-                        .addOnFailureListener {
-                            Log.w("SettleUpScreen", "Failed to fetch user name for $userId")
-                            // Check if we've loaded all names (even if some failed)
-                            if (memberNames.size == memberList.size) {
+                            // ================== MODIFIED LOGIC END ==================
+
+                            // Check if all fetches are done
+                            if (completedFetches == memberList.size) {
                                 namesLoaded = true
                             }
                         }
                 }
-            } else if (memberList.isNotEmpty() && memberNames.size == memberList.size) {
-                namesLoaded = true
             }
         }
     }
@@ -335,6 +357,28 @@ fun SettleUpScreen(
                 db.collection("settle_requests").add(payRequest)
                     .addOnSuccessListener {
                         Toast.makeText(context, "Payment request sent to ${transaction.toName}", Toast.LENGTH_SHORT).show()
+
+                        // ================== NEW ACTIVITY LOGIC START ==================
+                        val activity = hashMapOf(
+                            "type" to "SETTLE_REQUEST",
+                            "actorId" to currentUserId,
+                            "actorName" to currentUserName,
+                            "groupId" to groupId,
+                            "groupName" to groupName,
+                            "amount" to (amountToPay * 100).toLong(), // Convert to subunits
+                            "currencyCode" to "INR",
+                            "timestampMillis" to System.currentTimeMillis(),
+                            "participants" to listOf(currentUserId, transaction.toId), // Only the 2 people involved
+                            "status" to "pending" // For the ActivityScreen to show "Approve"
+                        )
+
+                        db.collection("activities").add(activity)
+                            .addOnFailureListener { e ->
+                                Log.w("SettleUpScreen", "Failed to create 'settle request' activity", e)
+                                // Non-fatal, just log it
+                            }
+                        // ================== NEW ACTIVITY LOGIC END ==================
+
                         transactionToPay = null
                     }
                     .addOnFailureListener { e ->
@@ -378,6 +422,29 @@ fun SettleUpScreen(
                                     .update("status", "confirmed")
                                     .addOnSuccessListener {
                                         Toast.makeText(context, "Payment confirmed!", Toast.LENGTH_SHORT).show()
+
+                                        // ================== NEW ACTIVITY LOGIC START ==================
+                                        val currentUserName = memberNames[currentUserId] ?: "You"
+                                        val activity = hashMapOf(
+                                            "type" to "SETTLE_APPROVED",
+                                            "actorId" to currentUserId, // You (the approver)
+                                            "actorName" to currentUserName, // Your name
+                                            "groupId" to request.groupId,
+                                            "groupName" to groupName, // Use the screen's groupName
+                                            "amount" to (request.amount * 100).toLong(), // Convert to subunits
+                                            "currencyCode" to "INR",
+                                            "timestampMillis" to System.currentTimeMillis(),
+                                            "participants" to listOf(request.fromId, request.toId), // Both people involved
+                                            "originalRequesterId" to request.fromId,
+                                            "originalRequesterName" to request.fromName
+                                        )
+
+                                        db.collection("activities").add(activity)
+                                            .addOnFailureListener { e ->
+                                                Log.e("SettleUpScreen", "Failed to create 'settle approved' activity", e)
+                                                // Non-fatal, just log it
+                                            }
+                                        // ================== NEW ACTIVITY LOGIC END ==================
                                     }
                                     .addOnFailureListener { e ->
                                         Log.e("SettleUpScreen", "Error confirming payment", e)
@@ -444,9 +511,9 @@ private fun SettlementListItem(
     val personName = if (isOwedToUser) transaction.fromName else transaction.toName
 
     val details = if (isOwedToUser) {
-        SettlementActionDetails("Owes you ${currencyFormat.format(transaction.amount)}", Color(0xFF2E7D32), "Remind", Icons.Default.Send)
+        SettlementActionDetails("Owes you ${formatCurrency(transaction.amount)}", Color(0xFF2E7D32), "Remind", Icons.Default.Send)
     } else {
-        SettlementActionDetails("You owe ${currencyFormat.format(transaction.amount)}", MaterialTheme.colorScheme.error, "Pay", Icons.Default.Payment)
+        SettlementActionDetails("You owe ${formatCurrency(transaction.amount)}", MaterialTheme.colorScheme.error, "Pay", Icons.Default.Payment)
     }
 
     Card(

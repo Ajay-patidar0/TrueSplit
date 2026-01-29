@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -31,6 +32,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -77,7 +79,8 @@ data class GroupData(
 @Composable
 fun GroupScreen(
     auth: FirebaseAuth,
-    navToDetails: (String) -> Unit
+    navToDetails: (String) -> Unit,
+    navToActivity: () -> Unit  // New navigation parameter
 ) {
     val db = FirebaseFirestore.getInstance()
     val userId = auth.currentUser?.uid ?: return
@@ -239,24 +242,44 @@ fun GroupScreen(
     // ===================== UI =====================
     Scaffold(
         topBar = {
+            // Custom Top Bar implementation
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(180.dp)
+                    .height(120.dp)
                     .background(
                         color = Color(0xFF2C5A8C),
                         shape = RoundedCornerShape(bottomStart = 25.dp, bottomEnd = 25.dp)
                     )
             ) {
+                // Title
                 Text(
                     text = "Your Groups",
                     color = Color.White,
-                    fontSize = 36.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 24.dp)
+                        .align(Alignment.BottomStart)
+                        .padding(start = 24.dp, bottom = 16.dp)
                 )
+
+                // Activity button
+                IconButton(
+                    onClick = { navToActivity() },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 12.dp)
+                        .size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Notifications,
+                        contentDescription = "Activity",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // Decorative circle
                 Box(
                     modifier = Modifier
                         .size(100.dp)
@@ -347,6 +370,27 @@ fun GroupScreen(
                     "memberIds" to listOf(userId)
                 )
                 db.collection("groups").add(group)
+                    // MODIFIED: Added OnSuccessListener to create activity log
+                    .addOnSuccessListener { documentReference ->
+                        val newGroupId = documentReference.id
+                        // Create an activity log for group creation
+                        val activity = hashMapOf(
+                            "type" to "GROUP_MEMBER_ADDED", // Creator is the first member added
+                            "actorId" to userId,
+                            "actorName" to userName,
+                            "groupId" to newGroupId,
+                            "groupName" to name,
+                            "message" to "$userName created the group '$name'",
+                            "timestampMillis" to System.currentTimeMillis(),
+                            "participants" to listOf(userId) // Only the creator is a participant
+                        )
+
+                        db.collection("activities").add(activity)
+                            .addOnFailureListener { e ->
+                                Log.e("GroupScreen", "Failed to create 'group created' activity", e)
+                                // Non-fatal error, group was still created.
+                            }
+                    }
                     .addOnFailureListener { e ->
                         Toast.makeText(context, "Failed to create group", Toast.LENGTH_SHORT).show()
                         Log.e("GroupScreen", "Error creating group", e)
@@ -415,6 +459,30 @@ fun GroupScreen(
                                     .update(mapOf("status" to "completed"))
                                     .addOnSuccessListener {
                                         Toast.makeText(context, "Payment accepted and settlement added", Toast.LENGTH_SHORT).show()
+
+                                        // ================== NEW ACTIVITY LOGIC START ==================
+                                        // Create an activity log for the approved settlement
+                                        val activity = hashMapOf(
+                                            "type" to "SETTLE_APPROVED",
+                                            "actorId" to userId, // You (the approver)
+                                            "actorName" to userName, // Your name
+                                            "groupId" to req.groupId,
+                                            "groupName" to (groups.find { it.id == req.groupId }?.name ?: ""),
+                                            "amount" to (req.amount * 100).toLong(), // Convert to subunits (paisa/cents)
+                                            "currencyCode" to "INR", // Assuming INR as it's not in SettleRequest
+                                            "timestampMillis" to System.currentTimeMillis(),
+                                            "participants" to listOf(req.fromId, req.toId), // Both people involved
+                                            "originalRequesterId" to req.fromId,
+                                            "originalRequesterName" to req.fromName
+                                        )
+
+                                        db.collection("activities").add(activity)
+                                            .addOnFailureListener { e ->
+                                                Log.e("GroupScreen", "Failed to create 'settle approved' activity", e)
+                                                // Non-fatal, just log it
+                                            }
+                                        // ================== NEW ACTIVITY LOGIC END ==================
+
                                     }
                                     .addOnFailureListener { e ->
                                         Log.e("GroupScreen", "Error updating request status", e)

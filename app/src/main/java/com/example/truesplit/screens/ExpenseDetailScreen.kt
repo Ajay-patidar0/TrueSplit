@@ -1,5 +1,6 @@
 package com.example.truesplit.screens
 
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -43,8 +44,10 @@ fun ExpenseDetailScreen(
     var expense by remember { mutableStateOf<Map<String, Any>?>(null) }
     var groupMembers by remember { mutableStateOf(listOf<Map<String, String>>()) }
     val memberNames = remember { mutableStateMapOf<String, String>() }
+    // MODIFIED: Added state for groupName
+    var groupName by remember { mutableStateOf("") }
 
-// Fetch expense details
+    // Fetch expense details
     LaunchedEffect(expenseId) {
         db.collection("groups").document(groupId)
             .collection("expenses").document(expenseId)
@@ -59,10 +62,12 @@ fun ExpenseDetailScreen(
             } else {
                 emptyList()
             }
+            // MODIFIED: Fetch groupName
+            groupName = snapshot?.getString("name") ?: ""
         }
     }
 
-// Fetch member names
+    // Fetch member names
     LaunchedEffect(groupMembers) {
         groupMembers.forEach { member ->
             val uid = member["id"] ?: return@forEach
@@ -86,15 +91,51 @@ fun ExpenseDetailScreen(
                 },
                 actions = {
                     if (expense?.get("paidBy") == currentUserId) {
+                        // MODIFIED: Updated onClick logic to create activity log
                         IconButton(
                             onClick = {
-                                db.collection("groups").document(groupId)
-                                    .collection("expenses").document(expenseId)
-                                    .delete()
-                                    .addOnSuccessListener {
-                                        Toast.makeText(context, "Expense deleted", Toast.LENGTH_SHORT).show()
-                                        navBack()
-                                    }
+                                // Ensure expense data is loaded before trying to delete
+                                expense?.let { exp ->
+                                    db.collection("groups").document(groupId)
+                                        .collection("expenses").document(expenseId)
+                                        .delete()
+                                        .addOnSuccessListener {
+                                            Toast.makeText(context, "Expense deleted", Toast.LENGTH_SHORT).show()
+
+                                            // ================== NEW ACTIVITY LOGIC START ==================
+                                            val actorName = memberNames[currentUserId] ?: currentUser?.displayName ?: "Someone"
+                                            val allMemberIds = groupMembers.mapNotNull { it["id"] }
+                                            val expenseTitle = exp["title"] as? String ?: "Untitled"
+                                            val expenseAmount = (exp["amount"] as? Number)?.toDouble() ?: 0.0
+                                            val totalAmountInSubunits = (expenseAmount * 100).toLong()
+
+                                            val activity = hashMapOf(
+                                                "type" to "EXPENSE_DELETED",
+                                                "actorId" to currentUserId,
+                                                "actorName" to actorName,
+                                                "groupId" to groupId,
+                                                "groupName" to groupName, // Use the fetched group name
+                                                "relatedExpenseId" to expenseId,
+                                                "relatedExpenseTitle" to expenseTitle,
+                                                "amount" to totalAmountInSubunits,
+                                                "currencyCode" to "INR", // Assuming INR
+                                                "timestampMillis" to System.currentTimeMillis(),
+                                                "participants" to allMemberIds // All group members
+                                            )
+
+                                            db.collection("activities").add(activity)
+                                                .addOnFailureListener { e ->
+                                                    // Log failure, but don't block user
+                                                    Log.w("ExpenseDetail", "Failed to create 'delete' activity", e)
+                                                }
+                                            // ================== NEW ACTIVITY LOGIC END ==================
+
+                                            navBack() // Navigate back after success
+                                        }
+                                        .addOnFailureListener { e ->
+                                            Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                }
                             }
                         ) {
                             Icon(Icons.Filled.Delete, contentDescription = "Delete Expense")

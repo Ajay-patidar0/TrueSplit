@@ -20,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.truesplit.screens.*
+import com.example.truesplit.ui.activity.ActivityScreen // Import the ActivityScreen
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -122,7 +123,6 @@ class MainActivity : ComponentActivity() {
                     }
                 ) {
                     composable("login") { LoginScreen(navController, auth) }
-                    composable("signup") { SignupScreen(navController, auth) }
                     composable("profileSetup") {
                         ProfileSetupScreen(
                             navToHome = {
@@ -137,7 +137,28 @@ class MainActivity : ComponentActivity() {
                     composable("groups") {
                         GroupScreen(
                             auth = auth,
-                            navToDetails = { groupId -> navController.navigate("groupDetail/$groupId") }
+                            navToDetails = { groupId -> navController.navigate("groupDetail/$groupId") },
+                            navToActivity = {
+                                navController.navigate("activity") {
+                                    // Optional: Configure navigation behavior
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+                    composable("activity") {
+                        ActivityScreen(
+                            onOpenExpense = { expenseId ->
+                                // You might need to pass groupId here or get it from context
+                                // For now, navigate to expense detail with a placeholder groupId
+                                navController.navigate("expenseDetail/$expenseId/unknown")
+                            },
+                            onOpenGroup = { groupId ->
+                                navController.navigate("groupDetail/$groupId")
+                            },
+                            onOpenSettle = { groupId ->
+                                navController.navigate("settle_up/$groupId")
+                            }
                         )
                     }
                     composable(

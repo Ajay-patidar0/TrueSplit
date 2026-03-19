@@ -771,7 +771,13 @@ private fun ActivityCard(
                 )
 
                 // Settle Request Actions
-                if (activityItem.type == ActivityType.SETTLE_REQUEST) {
+                // Settlement UI (Request + Approved both show amount)
+                // Settlement UI (Request + Approved)
+                if (activityItem.type == ActivityType.SETTLE_REQUEST ||
+                    activityItem.type == ActivityType.SETTLE_APPROVED) {
+
+                    val isRequester = activityItem.actorId == currentUserId
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
@@ -779,6 +785,7 @@ private fun ActivityCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
+                        // Amount
                         Text(
                             text = formatCurrency(activityItem.amount, activityItem.currencyCode),
                             style = MaterialTheme.typography.titleMedium.copy(
@@ -787,32 +794,63 @@ private fun ActivityCard(
                             )
                         )
 
-                        if (activityItem.status == "approved") {
+                        // -------- SETTLE REQUEST --------
+                        if (activityItem.type == ActivityType.SETTLE_REQUEST) {
+
+                            when {
+                                activityItem.status == "approved" -> {
+                                    Text(
+                                        "Approved",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    )
+                                }
+
+                                // ✅ ONLY RECEIVER CAN APPROVE
+                                !isRequester -> {
+                                    FilledTonalButton(
+                                        onClick = { onApproveSettle() },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        modifier = Modifier.height(36.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Approve", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+
+                                // ❌ REQUESTER VIEW → show "Pending"
+                                else -> {
+                                    Text(
+                                        "Pending",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // -------- SETTLE APPROVED --------
+                        else {
                             Text(
-                                "Approved",
+                                "Settled",
                                 style = MaterialTheme.typography.labelMedium.copy(
                                     fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             )
-                        } else {
-                            FilledTonalButton(
-                                onClick = { onApproveSettle() },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                ),
-                                modifier = Modifier.height(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Approve", style = MaterialTheme.typography.labelMedium)
-                            }
                         }
                     }
                 }
@@ -895,10 +933,11 @@ private fun buildActivityDescription(act: ActivityItem, currentUserId: String?):
             }
         }
         ActivityType.SETTLE_APPROVED -> {
+            val amount = formatCurrency(act.amount, act.currencyCode)
             if (isMe) {
-                "You approved the settle-up from ${act.originalRequesterName ?: "someone"}"
+                "You settled $amount with ${act.originalRequesterName ?: "someone"}"
             } else {
-                "$actor approved your settle-up request"
+                "$actor settled $amount with you"
             }
         }
         ActivityType.GROUP_MEMBER_ADDED -> {

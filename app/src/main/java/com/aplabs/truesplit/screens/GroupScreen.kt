@@ -1,4 +1,4 @@
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import android.util.Log
 import android.widget.Toast
@@ -55,12 +55,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.truesplit.R
-import com.example.truesplit.model.SettleRequest
-import com.example.truesplit.utils.ExpenseUtils
+import com.aplabs.truesplit.R
+import com.aplabs.truesplit.model.SettleRequest
+import com.aplabs.truesplit.utils.ExpenseUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.ktx.toObject

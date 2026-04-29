@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.truesplit"
+    namespace = "com.aplabs.truesplit"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.truesplit"
+        applicationId = "com.aplabs.truesplit"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

@@ -1,4 +1,4 @@
-package com.example.truesplit.utils
+package com.aplabs.truesplit.utils
 
 object ExpenseUtils {
 

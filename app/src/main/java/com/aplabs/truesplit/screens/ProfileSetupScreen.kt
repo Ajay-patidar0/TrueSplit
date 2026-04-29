@@ -1,4 +1,4 @@
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape

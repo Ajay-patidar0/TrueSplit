@@ -22,8 +22,8 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="com.example.truesplit" />
-                  <option name="mobileSdkAppId" value="1:556941967707:android:f65a8f64bc29bb2015da7e" />
+                  <option name="appId" value="com.aplabs.truesplit" />
+                  <option name="mobileSdkAppId" value="1:556941967707:android:9947b1990459453815da7e" />
                   <option name="projectId" value="truesplit-933dc" />
                   <option name="projectNumber" value="556941967707" />
                 </ConnectionSetting>

@@ -1,4 +1,4 @@
-package com.example.truesplit.model
+package com.aplabs.truesplit.model
 
 import com.google.firebase.Timestamp
 

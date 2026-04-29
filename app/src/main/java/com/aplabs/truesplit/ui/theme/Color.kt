@@ -1,4 +1,4 @@
-package com.example.truesplit.ui.theme
+package com.aplabs.truesplit.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

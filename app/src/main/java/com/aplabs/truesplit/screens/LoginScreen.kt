@@ -1,4 +1,4 @@
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import android.content.Intent
 import android.net.Uri
@@ -28,7 +28,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.truesplit.R
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
@@ -38,6 +37,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import com.aplabs.truesplit.R
 
 @Composable
 fun LoginScreen(
@@ -240,7 +240,7 @@ fun LoginScreen(
 
                 append("By continuing, you agree to our ")
 
-                pushStringAnnotation("PRIVACY", "https://yoursite.com/privacy")
+                pushStringAnnotation("PRIVACY", "https://ajay-patidar0.github.io/Truesplit-app-policy/")
 
                 withStyle(
                     style = SpanStyle(
@@ -256,7 +256,7 @@ fun LoginScreen(
 
                 append(" and ")
 
-                pushStringAnnotation("TERMS", "https://yoursite.com/terms")
+                pushStringAnnotation("TERMS", "https://ajay-patidar0.github.io/Truesplit-app-policy/")
 
                 withStyle(
                     style = SpanStyle(

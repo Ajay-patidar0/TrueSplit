@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import android.util.Log
 import androidx.compose.foundation.background

@@ -1,0 +1,76 @@
+{
+  "project_info": {
+    "project_number": "556941967707",
+    "project_id": "truesplit-933dc",
+    "storage_bucket": "truesplit-933dc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:556941967707:android:9947b1990459453815da7e",
+        "android_client_info": {
+          "package_name": "com.aplabs.truesplit"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "556941967707-7fvn0tbf6c3guvmaqoutdvnpto7n59de.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHfQ1krkXzudUZlOZroe3uDjIOytus29Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "556941967707-7fvn0tbf6c3guvmaqoutdvnpto7n59de.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:556941967707:android:f65a8f64bc29bb2015da7e",
+        "android_client_info": {
+          "package_name": "com.example.truesplit"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "556941967707-q1iqp5crmi7rarl9i904rgtgea0png2m.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.truesplit",
+            "certificate_hash": "a2a039c73c73f8d7275201b7c120f2a9bb304a87"
+          }
+        },
+        {
+          "client_id": "556941967707-7fvn0tbf6c3guvmaqoutdvnpto7n59de.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHfQ1krkXzudUZlOZroe3uDjIOytus29Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "556941967707-7fvn0tbf6c3guvmaqoutdvnpto7n59de.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

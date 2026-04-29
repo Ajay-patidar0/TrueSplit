@@ -1,9 +1,8 @@
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import android.content.Intent
 import android.util.Log
 import android.widget.Toast
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,14 +22,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.truesplit.R
-import com.example.truesplit.model.SettleRequest
-import com.example.truesplit.utils.ExpenseUtils
+import com.aplabs.truesplit.model.SettleRequest
+import com.aplabs.truesplit.utils.ExpenseUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore

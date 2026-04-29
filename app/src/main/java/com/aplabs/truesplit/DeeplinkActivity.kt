@@ -1,4 +1,4 @@
-package com.example.truesplit
+package com.aplabs.truesplit
 
 import android.content.Intent
 import android.net.Uri

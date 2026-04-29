@@ -1,4 +1,4 @@
-package com.example.truesplit.screens
+package com.aplabs.truesplit.screens
 
 import android.content.Intent
 import android.net.Uri

@@ -1,4 +1,4 @@
-package com.example.truesplit
+package com.aplabs.truesplit
 
 import android.content.Intent
 import android.os.Bundle
@@ -19,8 +19,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.truesplit.screens.*
-import com.example.truesplit.ui.activity.ActivityScreen // Import the ActivityScreen
+import com.aplabs.truesplit.screens.*
+import com.aplabs.truesplit.ui.activity.ActivityScreen // Import the ActivityScreen
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore

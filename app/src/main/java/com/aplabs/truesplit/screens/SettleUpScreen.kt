@@ -294,7 +294,7 @@ fun SettleUpScreen(
 
     transactionToRemind?.let { transaction ->
         val shareMessage = "${transaction.fromName}, you owe me ${formatCurrency(transaction.amount)} in the group '$groupName'. " +
-                "Please settle up using this link: https://truesplit.airbridge.io/reminder?groupId=$groupId"
+                "\nPlease settle up using this link:\n https://truesplit.airbridge.io/reminder?groupId=$groupId"
 
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND

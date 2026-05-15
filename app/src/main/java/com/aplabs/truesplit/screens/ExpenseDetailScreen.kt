@@ -43,10 +43,9 @@ fun ExpenseDetailScreen(
     var expense by remember { mutableStateOf<Map<String, Any>?>(null) }
     var groupMembers by remember { mutableStateOf(listOf<Map<String, String>>()) }
     val memberNames = remember { mutableStateMapOf<String, String>() }
-    // MODIFIED: Added state for groupName
     var groupName by remember { mutableStateOf("") }
 
-    // Fetch expense details
+    // Fetch expense details and group members
     LaunchedEffect(expenseId) {
         db.collection("groups").document(groupId)
             .collection("expenses").document(expenseId)
@@ -61,7 +60,6 @@ fun ExpenseDetailScreen(
             } else {
                 emptyList()
             }
-            // MODIFIED: Fetch groupName
             groupName = snapshot?.getString("name") ?: ""
         }
     }
@@ -74,6 +72,9 @@ fun ExpenseDetailScreen(
                 db.collection("users").document(uid).get()
                     .addOnSuccessListener { doc ->
                         memberNames[uid] = doc.getString("name") ?: member["name"] ?: "Unknown"
+                    }
+                    .addOnFailureListener {
+                        memberNames[uid] = member["name"] ?: "Unknown"
                     }
             }
         }
@@ -90,10 +91,8 @@ fun ExpenseDetailScreen(
                 },
                 actions = {
                     if (expense?.get("paidBy") == currentUserId) {
-                        // MODIFIED: Updated onClick logic to create activity log
                         IconButton(
                             onClick = {
-                                // Ensure expense data is loaded before trying to delete
                                 expense?.let { exp ->
                                     db.collection("groups").document(groupId)
                                         .collection("expenses").document(expenseId)
@@ -101,7 +100,7 @@ fun ExpenseDetailScreen(
                                         .addOnSuccessListener {
                                             Toast.makeText(context, "Expense deleted", Toast.LENGTH_SHORT).show()
 
-                                            // ================== NEW ACTIVITY LOGIC START ==================
+                                            // Activity log for deletion
                                             val actorName = memberNames[currentUserId] ?: currentUser?.displayName ?: "Someone"
                                             val allMemberIds = groupMembers.mapNotNull { it["id"] }
                                             val expenseTitle = exp["title"] as? String ?: "Untitled"
@@ -113,23 +112,21 @@ fun ExpenseDetailScreen(
                                                 "actorId" to currentUserId,
                                                 "actorName" to actorName,
                                                 "groupId" to groupId,
-                                                "groupName" to groupName, // Use the fetched group name
+                                                "groupName" to groupName,
                                                 "relatedExpenseId" to expenseId,
                                                 "relatedExpenseTitle" to expenseTitle,
                                                 "amount" to totalAmountInSubunits,
-                                                "currencyCode" to "INR", // Assuming INR
+                                                "currencyCode" to "INR",
                                                 "timestampMillis" to System.currentTimeMillis(),
-                                                "participants" to allMemberIds // All group members
+                                                "participants" to allMemberIds
                                             )
 
                                             db.collection("activities").add(activity)
                                                 .addOnFailureListener { e ->
-                                                    // Log failure, but don't block user
-                                                    Log.w("ExpenseDetail", "Failed to create 'delete' activity", e)
+                                                    Log.w("ExpenseDetail", "Failed to create activity", e)
                                                 }
-                                            // ================== NEW ACTIVITY LOGIC END ==================
 
-                                            navBack() // Navigate back after success
+                                            navBack()
                                         }
                                         .addOnFailureListener { e ->
                                             Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -167,8 +164,6 @@ fun ExpenseDetailScreen(
 
                 items(computeSharesForTransaction(exp).toList()) { (userId, amount) ->
                     val name = memberNames[userId] ?: "Unknown"
-                    val paidByName = memberNames[exp["paidBy"] as? String ?: ""] ?: "Unknown"
-
                     ParticipantRow(
                         name = if (userId == exp["paidBy"]) "$name (paid)" else name,
                         amount = amount,
@@ -278,13 +273,17 @@ fun ParticipantRow(name: String, amount: Double, isPayer: Boolean, modifier: Mod
     }
 }
 
+/**
+ * Robust split parser – identical to the one used in ExpenseUtils.
+ * Kept here for independence.
+ */
 private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Double> {
     val amount = (tx["amount"] as? Number)?.toDouble() ?: 0.0
     if (amount <= 0.0) return emptyMap()
+
     // 1) splits map
     val splitsRaw = tx["splits"]
     if (splitsRaw is Map<*, *>) {
-        // Check if numeric amounts
         val numericEntries = splitsRaw.entries.mapNotNull { (k, v) ->
             val userId = k as? String ?: return@mapNotNull null
             when (v) {
@@ -294,16 +293,13 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
                 else -> null
             }
         }
-
         if (numericEntries.isNotEmpty()) {
             val asMap = numericEntries.toMap()
             val sum = asMap.values.sum()
             return if (sum > 0.0) {
-                // If provided shares don't sum to amount, scale proportionally
                 val scale = amount / sum
                 asMap.mapValues { (_, v) -> v * scale }
             } else {
-                // All zeros -> fallback to equal split among "true" flags only (handled above as 1.0s)
                 val included = numericEntries.filter { it.second > 0 }.map { it.first }
                 if (included.isNotEmpty()) {
                     val share = amount / included.size
@@ -311,10 +307,8 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
                 } else emptyMap()
             }
         } else {
-            // Boolean-only map: take all `true` as participants
             val participants = splitsRaw.entries.mapNotNull { (k, v) ->
-                val userId = k as? String ?: return@mapNotNull null
-                if (v == true) userId else null
+                if (v == true) k as? String else null
             }
             if (participants.isNotEmpty()) {
                 val share = amount / participants.size
@@ -323,7 +317,7 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         }
     }
 
-// 2) splitBetween: List<userId>
+    // 2) splitBetween
     val splitBetween = tx["splitBetween"]
     if (splitBetween is List<*>) {
         val participants = splitBetween.mapNotNull { it as? String }
@@ -333,11 +327,10 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         }
     }
 
-// 3) splitWith: List<Map<...>>
+    // 3) splitWith
     val splitWith = tx["splitWith"]
     if (splitWith is List<*>) {
         val entries = splitWith.mapNotNull { it as? Map<*, *> }
-        // Try explicit amounts first
         val explicit = entries.mapNotNull { m ->
             val uid = m["userId"] as? String ?: return@mapNotNull null
             when (val v = m["amount"]) {
@@ -353,14 +346,13 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
                 explicit.associate { it.first to it.second * scale }
             } else emptyMap()
         }
-        // Fallback to inclusion flags
         val participants = entries.mapNotNull { m ->
             val uid = m["userId"] as? String ?: return@mapNotNull null
             val included = when (val inc = m["included"]) {
                 is Boolean -> inc
                 is Number -> inc.toInt() != 0
                 is String -> inc.equals("true", true) || inc == "1"
-                else -> true // presence implies included
+                else -> true
             }
             if (included) uid else null
         }
@@ -370,6 +362,5 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         }
     }
 
-// If nothing defined, return empty (means no one selected). Payer will be treated as lent full.
     return emptyMap()
 }

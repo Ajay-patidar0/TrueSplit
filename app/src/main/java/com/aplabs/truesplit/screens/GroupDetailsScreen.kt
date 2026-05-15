@@ -65,8 +65,12 @@ fun GroupDetailScreen(
     val memberNames = remember { mutableStateMapOf<String, String>() }
 
     var allTransactions by remember { mutableStateOf(listOf<Map<String, Any>>()) }
-    val expensesOnly = remember(allTransactions) { allTransactions.filter { it["type"] != "settle" } }
-    val settlementsOnly = remember(allTransactions) { allTransactions.filter { it["type"] == "settle" } }
+    // Deduplicate transactions by documentId (safety measure)
+    val uniqueTransactions = remember(allTransactions) {
+        allTransactions.distinctBy { it["documentId"] }
+    }
+    val expensesOnly = remember(uniqueTransactions) { uniqueTransactions.filter { it["type"] != "settle" } }
+    val settlementsOnly = remember(uniqueTransactions) { uniqueTransactions.filter { it["type"] == "settle" } }
 
     var createdBy by remember { mutableStateOf("") }
 
@@ -77,12 +81,20 @@ fun GroupDetailScreen(
 
     // Pull group & members
     LaunchedEffect(groupId) {
-        db.collection("groups").document(groupId).addSnapshotListener { snapshot, _ ->
+        db.collection("groups").document(groupId).addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                Log.e("GroupDetail", "Listen failed: $error")
+                return@addSnapshotListener
+            }
             snapshot?.let {
                 groupName = it.getString("name") ?: "Group"
                 createdBy = it.getString("createdBy") ?: ""
                 val colorString = it.getString("color") ?: "#6750A4"
-                groupColor = try { Color(android.graphics.Color.parseColor(colorString)) } catch (_: IllegalArgumentException) { Color(0xFF6750A4) }
+                groupColor = try {
+                    Color(android.graphics.Color.parseColor(colorString))
+                } catch (_: IllegalArgumentException) {
+                    Color(0xFF6750A4)
+                }
 
                 val rawMembers = it.get("members")
                 members = if (rawMembers is List<*>) rawMembers.filterIsInstance<Map<String, String>>() else emptyList()
@@ -92,7 +104,11 @@ fun GroupDetailScreen(
         db.collection("groups").document(groupId)
             .collection("expenses")
             .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, _ ->
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e("GroupDetail", "Expenses listen failed: $error")
+                    return@addSnapshotListener
+                }
                 allTransactions = snapshot?.documents?.mapNotNull { doc ->
                     doc.data?.toMutableMap()?.apply {
                         put("documentId", doc.id)
@@ -101,24 +117,28 @@ fun GroupDetailScreen(
             }
     }
 
-    // Fetch display names from /users
+    // Fetch display names from /users (only once per member)
     LaunchedEffect(members) {
         val firestore = FirebaseFirestore.getInstance()
         members.forEach { m ->
             val uid = m["id"] ?: return@forEach
-            if (uid !in memberNames) {
+            if (!memberNames.containsKey(uid)) {
                 firestore.collection("users").document(uid).get()
                     .addOnSuccessListener { doc ->
-                        val n = doc.getString("name") ?: m["name"] ?: "Unknown"
-                        memberNames[uid] = n
+                        val name = doc.getString("name") ?: m["name"] ?: "Unknown"
+                        memberNames[uid] = name
+                    }
+                    .addOnFailureListener { e ->
+                        Log.w("GroupDetail", "Failed to fetch name for $uid", e)
+                        memberNames[uid] = m["name"] ?: "Unknown"
                     }
             }
         }
     }
 
     // Calculate balances accurately based on selected participants only
-    val groupBalances = remember(allTransactions, members) {
-        calculateGroupBalancesAccurate(members, allTransactions)
+    val groupBalances = remember(uniqueTransactions, members) {
+        calculateGroupBalancesAccurate(members, uniqueTransactions)
     }
     val userBalance = groupBalances[currentUserId] ?: 0.0
 
@@ -127,18 +147,21 @@ fun GroupDetailScreen(
             TopAppBar(
                 title = { Text(groupName, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)) },
                 navigationIcon = {
-                    IconButton(onClick = navBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White) }
+                    IconButton(onClick = navBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    }
                 },
                 actions = {
-                    IconButton(onClick = { showInviteDialog = true }) { Icon(Icons.Filled.PersonAdd, contentDescription = "Invite", tint = Color.White) }
+                    IconButton(onClick = { showInviteDialog = true }) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = "Invite", tint = Color.White)
+                    }
                     if (currentUser?.email == createdBy) {
-                        IconButton(onClick = { showDeleteConfirm = true }) { Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color.White) }
+                        IconButton(onClick = { showDeleteConfirm = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color.White)
+                        }
                     } else {
                         if (userBalance.absoluteValue < 0.01) {
-                            // Leave group only when settled
-                            // (icon not auto-mirrored exit to keep UI minimal)
                             IconButton(onClick = { showLeaveConfirm = true }) {
-                                // Use simple icon to keep minimalistic
                                 Icon(Icons.Filled.Delete, contentDescription = "Leave Group", tint = Color.White)
                             }
                         }
@@ -205,7 +228,12 @@ fun GroupDetailScreen(
                     }
                 }
             } else {
-                items(listToDisplay, key = { it["timestamp"].toString() }) { transaction ->
+                items(
+                    items = listToDisplay,
+                    key = { transaction ->
+                        transaction["documentId"] as? String ?: transaction.hashCode()
+                    }
+                ) { transaction ->
                     TransactionListItem(
                         transaction = transaction,
                         memberNames = memberNames,
@@ -237,6 +265,9 @@ fun GroupDetailScreen(
                             Toast.makeText(context, "Group deleted", Toast.LENGTH_SHORT).show()
                             navBack()
                         }
+                        .addOnFailureListener { e ->
+                            Toast.makeText(context, "Failed to delete group: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                 } else {
                     Toast.makeText(context, "Cannot delete group. All members must settle up first.", Toast.LENGTH_LONG).show()
                 }
@@ -251,12 +282,9 @@ fun GroupDetailScreen(
             onDismiss = { showLeaveConfirm = false },
             onConfirm = {
                 if (userBalance.absoluteValue < 0.01) {
-                    // ================== NEW ACTIVITY LOGIC START ==================
-                    // Get all member IDs *before* leaving for the activity log
+                    // Create activity log
                     val allMemberIds = members.mapNotNull { it["id"] }
-                    val actorName = currentUser?.displayName ?: "Unknown"
-
-                    // Create the activity log
+                    val actorName = memberNames[currentUserId] ?: currentUser?.displayName ?: "Unknown"
                     val activity = hashMapOf(
                         "type" to "GROUP_MEMBER_REMOVED",
                         "actorId" to currentUserId,
@@ -265,18 +293,15 @@ fun GroupDetailScreen(
                         "groupName" to groupName,
                         "message" to "$actorName left the group '$groupName'",
                         "timestampMillis" to System.currentTimeMillis(),
-                        "participants" to allMemberIds // Everyone in the group sees this
+                        "participants" to allMemberIds
                     )
-
                     db.collection("activities").add(activity)
                         .addOnFailureListener { e ->
-                            Log.w("GroupDetailScreen", "Failed to create 'member left' activity", e)
-                            // Don't block the user from leaving, just log the error
+                            Log.w("GroupDetail", "Failed to create activity", e)
                         }
-                    // ================== NEW ACTIVITY LOGIC END ==================
 
                     val updatedMembers = members.filter { it["id"] != currentUserId }
-                    val updatedMemberIds = updatedMembers.mapNotNull { it["id"] } // Recalculate based on updated list
+                    val updatedMemberIds = updatedMembers.mapNotNull { it["id"] }
 
                     val task = if (updatedMembers.isEmpty()) {
                         db.collection("groups").document(groupId).delete()
@@ -291,6 +316,8 @@ fun GroupDetailScreen(
                     task.addOnSuccessListener {
                         Toast.makeText(context, "You left the group", Toast.LENGTH_SHORT).show()
                         navBack()
+                    }.addOnFailureListener { e ->
+                        Toast.makeText(context, "Failed to leave group: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     Toast.makeText(context, "Cannot leave group until your balance is settled.", Toast.LENGTH_LONG).show()
@@ -442,7 +469,7 @@ private fun TransactionListItem(
         categoryIcon to "Paid by $paidByName"
     }
 
-    // Compute per-user amount and status (only for expenses)
+    // Compute per-user amount and status
     val (statusText, statusColor, statusBg, userAmountText, amountColorRight) =
         if (type == "settle") {
             Quint("Settlement", MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
@@ -451,37 +478,50 @@ private fun TransactionListItem(
             val shares = computeSharesForTransaction(transaction)
             val participants = shares.keys
 
-            // If no participants recorded, treat as payer lent full amount; others not involved.
             val userIsPayer = currentUserId == paidById
             val userIsParticipant = currentUserId in participants
 
-            if (userIsPayer) {
-                val payerShare = shares[currentUserId] ?: 0.0
-                val lent = max(0.0, amount - payerShare) // what others owe you
-                Quint(
-                    "You lent",
-                    Color(0xFF1B5E20),
-                    Color(0x331B5E20),
-                    currencyFormat.format(lent),
-                    Color(0xFF1B5E20)
-                )
-            } else if (userIsParticipant) {
-                val borrowed = shares[currentUserId] ?: 0.0
-                Quint(
-                    "You borrowed",
-                    MaterialTheme.colorScheme.error,
-                    MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                    currencyFormat.format(borrowed),
-                    MaterialTheme.colorScheme.error
-                )
-            } else {
-                Quint(
-                    "Not involved",
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                    "—",
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            when {
+                shares.isEmpty() && userIsPayer -> {
+                    // No participants selected => treat as personal expense, no net lending
+                    Quint(
+                        "You paid",
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        currencyFormat.format(amount),
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                userIsPayer -> {
+                    val payerShare = shares[currentUserId] ?: 0.0
+                    val lent = max(0.0, amount - payerShare)
+                    Quint(
+                        "You lent",
+                        Color(0xFF1B5E20),
+                        Color(0x331B5E20),
+                        currencyFormat.format(lent),
+                        Color(0xFF1B5E20)
+                    )
+                }
+                userIsParticipant -> {
+                    val borrowed = shares[currentUserId] ?: 0.0
+                    Quint(
+                        "You borrowed",
+                        MaterialTheme.colorScheme.error,
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                        currencyFormat.format(borrowed),
+                        MaterialTheme.colorScheme.error
+                    )
+                }
+                else -> {
+                    Quint(
+                        "Not involved",
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        "—",
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -512,10 +552,8 @@ private fun TransactionListItem(
                 Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-                // Status chip (only meaningful for expenses; settlement shows "Settlement")
                 StatusChip(text = statusText, fg = statusColor, bg = statusBg, modifier = Modifier.padding(top = 6.dp))
             }
-            // Amount relevant TO THE USER (lent/borrowed) — minimal and color aligned
             Text(
                 text = userAmountText,
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
@@ -550,7 +588,6 @@ private fun GroupDetailFABs(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.padding(bottom = 8.dp, end = 8.dp)
     ) {
-        // Smaller, minimal Extended FAB
         if (balance.absoluteValue > 0.01) {
             ExtendedFloatingActionButton(
                 onClick = onSettleUpClick,
@@ -625,9 +662,15 @@ private fun ShareInviteLinkDialog(
                 }
                 context.startActivity(Intent.createChooser(intent, "Share Invite Link"))
                 onDismiss()
-            }, shape = RoundedCornerShape(8.dp)) { Text("Share Link") }
+            }, shape = RoundedCornerShape(8.dp)) {
+                Text("Share Link")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) { Text("Close") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
+                Text("Close")
+            }
+        },
         shape = RoundedCornerShape(16.dp)
     )
 }
@@ -637,7 +680,7 @@ private fun ShareInviteLinkDialog(
 /**
  * Returns a per-user share map (userId -> share amount) for an expense transaction.
  * Supports:
- * - "splits": Map<userId, Number|Boolean>  (numbers treated as explicit amounts; booleans as inclusion flags)
+ * - "splits": Map<userId, Number|Boolean> (numbers: explicit amounts; booleans: inclusion)
  * - "splitBetween": List<userId>
  * - "splitWith": List<Map<String, Any>> containing "userId" and optional "amount"/"included"
  */
@@ -648,7 +691,6 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
     // 1) splits map
     val splitsRaw = tx["splits"]
     if (splitsRaw is Map<*, *>) {
-        // Check if numeric amounts
         val numericEntries = splitsRaw.entries.mapNotNull { (k, v) ->
             val userId = k as? String ?: return@mapNotNull null
             when (v) {
@@ -663,11 +705,10 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
             val asMap = numericEntries.toMap()
             val sum = asMap.values.sum()
             return if (sum > 0.0) {
-                // If provided shares don’t sum to amount, scale proportionally
                 val scale = amount / sum
                 asMap.mapValues { (_, v) -> v * scale }
             } else {
-                // All zeros -> fallback to equal split among "true" flags only (handled above as 1.0s)
+                // all zeros -> fallback to equal split among `true` flags
                 val included = numericEntries.filter { it.second > 0 }.map { it.first }
                 if (included.isNotEmpty()) {
                     val share = amount / included.size
@@ -677,8 +718,7 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         } else {
             // Boolean-only map: take all `true` as participants
             val participants = splitsRaw.entries.mapNotNull { (k, v) ->
-                val userId = k as? String ?: return@mapNotNull null
-                if (v == true) userId else null
+                if (v == true) k as? String else null
             }
             if (participants.isNotEmpty()) {
                 val share = amount / participants.size
@@ -712,10 +752,12 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         }
         if (explicit.isNotEmpty()) {
             val sum = explicit.sumOf { it.second }
-            return if (sum > 0) {
+            if (sum > 0) {
                 val scale = amount / sum
-                explicit.associate { it.first to it.second * scale }
-            } else emptyMap()
+                return explicit.associate { it.first to it.second * scale }
+            } else {
+                return emptyMap()
+            }
         }
         // Fallback to inclusion flags
         val participants = entries.mapNotNull { m ->
@@ -734,7 +776,7 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
         }
     }
 
-    // If nothing defined, return empty (means no one selected). Payer will be treated as lent full.
+    // If nothing defined, return empty (treat as personal expense, no net balance change)
     return emptyMap()
 }
 
@@ -742,6 +784,7 @@ private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Doubl
  * Accurate group balances:
  * - For each expense: participants only; per-user shares; payer credited with total paid.
  * - For settlements: payer credited (+), receiver debited (-).
+ * - If an expense has no participants, it is treated as a personal expense (no net balance change).
  * Positive balance => others owe this user.
  */
 private fun calculateGroupBalancesAccurate(
@@ -768,18 +811,18 @@ private fun calculateGroupBalancesAccurate(
             val paidBy = tx["paidBy"] as? String ?: return@forEach
             if (!balances.containsKey(paidBy)) return@forEach
 
-            val shares = computeSharesForTransaction(tx) // userId -> share amount
+            val shares = computeSharesForTransaction(tx)
             if (shares.isEmpty()) {
-                // No participants selected: payer lent full amount; no one owes except "others" unknown.
-                balances[paidBy] = balances.getValue(paidBy) + amount
-            } else {
-                // debit each participant by their share
-                shares.forEach { (uid, share) ->
-                    if (balances.containsKey(uid)) balances[uid] = balances.getValue(uid) - share
-                }
-                // credit payer with total paid
-                balances[paidBy] = balances.getValue(paidBy) + amount
+                // No participants selected: treat as personal expense, no balance change
+                // (Previously this incorrectly credited the payer full amount.)
+                return@forEach
             }
+            // Debit each participant by their share
+            shares.forEach { (uid, share) ->
+                if (balances.containsKey(uid)) balances[uid] = balances.getValue(uid) - share
+            }
+            // Credit payer with total paid
+            balances[paidBy] = balances.getValue(paidBy) + amount
         }
     }
     return balances

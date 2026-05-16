@@ -25,9 +25,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @Composable
 fun AddExpenseScreen(
@@ -35,83 +37,243 @@ fun AddExpenseScreen(
     groupId: String,
     groupMembers: List<Triple<String, String, String>>
 ) {
+
     val auth = FirebaseAuth.getInstance()
+
     val db = FirebaseFirestore.getInstance()
+
     val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
 
-    val currentUserId = auth.currentUser?.uid ?: ""
-    val currentUser = groupMembers.find { it.first == currentUserId }
+    val snackbarHostState =
+        remember { SnackbarHostState() }
 
-    var title by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var paidBy by remember { mutableStateOf(currentUserId) }
-    var splitType by remember { mutableStateOf("equal") }
+    val currentUserId =
+        auth.currentUser?.uid ?: ""
 
-    val selectedMembers = remember { mutableStateListOf<String>() }
-    val unequalAmounts = remember { mutableStateMapOf<String, String>() }
+    val currentUser =
+        groupMembers.find {
+            it.first == currentUserId
+        }
 
-    var dropdownExpanded by remember { mutableStateOf(false) }
-    val userProfileNames = remember { mutableStateMapOf<String, String>() }
+    var title by remember {
+        mutableStateOf("")
+    }
 
-    var groupName by remember { mutableStateOf("a group") }
-    var isSaving by remember { mutableStateOf(false) }
+    var amount by remember {
+        mutableStateOf("")
+    }
+
+    var paidBy by remember {
+        mutableStateOf(currentUserId)
+    }
+
+    var splitType by remember {
+        mutableStateOf("equal")
+    }
+
+    val selectedMembers =
+        remember {
+            mutableStateListOf<String>()
+        }
+
+    val unequalAmounts =
+        remember {
+            mutableStateMapOf<String, String>()
+        }
+
+    var dropdownExpanded by remember {
+        mutableStateOf(false)
+    }
+
+    val userProfileNames =
+        remember {
+            mutableStateMapOf<String, String>()
+        }
+
+    var groupName by remember {
+        mutableStateOf("a group")
+    }
+
+    var isSaving by remember {
+        mutableStateOf(false)
+    }
 
     LaunchedEffect(Unit) {
-        selectedMembers.clear()
-        selectedMembers.addAll(groupMembers.map { it.first }.distinct())
 
-        db.collection("groups").document(groupId).get()
+        selectedMembers.clear()
+
+        selectedMembers.addAll(
+            groupMembers
+                .map { it.first }
+                .distinct()
+        )
+
+        db.collection("groups")
+            .document(groupId)
+            .get()
+
             .addOnSuccessListener { document ->
-                groupName = document.getString("name") ?: "a group"
+
+                groupName =
+                    document.getString("name")
+                        ?: "a group"
             }
+
             .addOnFailureListener {
-                Log.w("AddExpenseScreen", "Failed to fetch group name", it)
+
+                Log.w(
+                    "AddExpenseScreen",
+                    "Failed to fetch group name",
+                    it
+                )
             }
 
         groupMembers.forEach { (userId, defaultName, _) ->
-            db.collection("users").document(userId).get()
+
+            db.collection("users")
+                .document(userId)
+                .get()
+
                 .addOnSuccessListener { document ->
+
                     userProfileNames[userId] =
-                        document.getString("name") ?: defaultName
+                        document.getString("name")
+                            ?: defaultName
+                }
+
+                .addOnFailureListener {
+
+                    userProfileNames[userId] =
+                        defaultName
                 }
         }
     }
 
     fun sanitizeDecimalInput(value: String): String {
-        val filtered = value.filter { it.isDigit() || it == '.' }
-        val firstDot = filtered.indexOf('.')
+
+        val filtered =
+            value.filter {
+                it.isDigit() || it == '.'
+            }
+
+        val firstDot =
+            filtered.indexOf('.')
 
         return if (firstDot >= 0) {
-            val before = filtered.substring(0, firstDot + 1)
-            val after = filtered.substring(firstDot + 1).replace(".", "")
+
+            val before =
+                filtered.substring(
+                    0,
+                    firstDot + 1
+                )
+
+            val after =
+                filtered.substring(
+                    firstDot + 1
+                ).replace(".", "")
+
             before + after
+
         } else {
+
             filtered
         }
     }
 
-    fun toggleMember(id: String, checked: Boolean) {
+    fun toggleMember(
+        id: String,
+        checked: Boolean
+    ) {
+
         if (checked) {
+
             if (!selectedMembers.contains(id)) {
                 selectedMembers.add(id)
             }
+
         } else {
+
             selectedMembers.remove(id)
             unequalAmounts.remove(id)
         }
     }
 
+    fun showError(message: String) {
+
+        coroutineScope.launch {
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    fun createExpenseNotifications(
+        expenseTitle: String,
+        totalAmount: Double,
+        actorName: String
+    ) {
+
+        val notificationTitle =
+            "New Expense Added"
+
+        val notificationBody =
+            "$actorName added ₹${
+                String.format("%.2f", totalAmount)
+            } for $expenseTitle"
+
+        selectedMembers
+            .distinct()
+            .filter { it != currentUserId }
+            .forEach { memberId ->
+
+                val notification =
+                    hashMapOf(
+
+                        "title" to notificationTitle,
+
+                        "body" to notificationBody,
+
+                        "timestamp" to Timestamp.now(),
+
+                        "groupId" to groupId,
+
+                        "groupName" to groupName,
+
+                        "type" to "expense",
+
+                        "expenseTitle" to expenseTitle,
+
+                        "amount" to totalAmount,
+
+                        "senderId" to currentUserId
+                    )
+
+                db.collection("notifications")
+                    .document(memberId)
+                    .collection("items")
+                    .add(notification)
+            }
+    }
+
     Scaffold(
+
         topBar = {
+
             TopAppBar(
-                title = { Text("Add Expense") },
+
+                title = {
+                    Text("Add Expense")
+                },
+
                 navigationIcon = {
+
                     IconButton(
                         onClick = {
-                            if (!isSaving) navController.popBackStack()
+
+                            if (!isSaving) {
+                                navController.popBackStack()
+                            }
                         }
                     ) {
+
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
@@ -122,94 +284,200 @@ fun AddExpenseScreen(
         },
 
         floatingActionButton = {
+
             FloatingActionButton(
+
                 onClick = {
 
-                    if (isSaving) return@FloatingActionButton
-
-                    val totalAmount = amount.toDoubleOrNull()
-
-                    if (title.isBlank()) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Please enter a title.")
-                        }
+                    if (isSaving) {
                         return@FloatingActionButton
                     }
 
-                    if (totalAmount == null || totalAmount <= 0.0) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Please enter a valid amount.")
-                        }
+                    val totalAmount =
+                        amount.toDoubleOrNull()
+
+                    if (title.trim().isBlank()) {
+
+                        showError(
+                            "Please enter expense title."
+                        )
+
                         return@FloatingActionButton
                     }
 
-                    val participants = selectedMembers.distinct()
+                    if (
+                        totalAmount == null ||
+                        totalAmount <= 0.0
+                    ) {
+
+                        showError(
+                            "Please enter valid amount."
+                        )
+
+                        return@FloatingActionButton
+                    }
+
+                    if (
+                        !groupMembers.any {
+                            it.first == paidBy
+                        }
+                    ) {
+
+                        showError(
+                            "Invalid payer selected."
+                        )
+
+                        return@FloatingActionButton
+                    }
+
+                    val participants =
+                        selectedMembers.distinct()
 
                     if (participants.isEmpty()) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Select at least one member.")
-                        }
+
+                        showError(
+                            "Select at least one member."
+                        )
+
                         return@FloatingActionButton
                     }
 
-                    val splits: Map<String, Double> = when (splitType) {
+                    val formattedTotalAmount =
+                        String.format(
+                            "%.2f",
+                            totalAmount
+                        ).toDouble()
+
+                    val splits =
+                        mutableMapOf<String, Double>()
+
+                    when (splitType) {
 
                         "equal" -> {
-                            val perPerson = totalAmount / participants.size
-                            participants.associateWith {
-                                String.format("%.2f", perPerson).toDouble()
+
+                            val totalInPaise =
+                                (formattedTotalAmount * 100)
+                                    .toLong()
+
+                            val memberCount =
+                                participants.size
+
+                            if (memberCount <= 0) {
+
+                                showError(
+                                    "Invalid participant count."
+                                )
+
+                                return@FloatingActionButton
+                            }
+
+                            val baseShare =
+                                totalInPaise / memberCount
+
+                            val remainder =
+                                totalInPaise % memberCount
+
+                            participants.forEachIndexed { index, userId ->
+
+                                val shareInPaise =
+                                    if (index < remainder) {
+                                        baseShare + 1
+                                    } else {
+                                        baseShare
+                                    }
+
+                                splits[userId] =
+                                    shareInPaise / 100.0
                             }
                         }
 
                         "unequal" -> {
-                            val map = mutableMapOf<String, Double>()
-                            var sum = 0.0
 
-                            for (id in participants) {
-                                val entered =
-                                    unequalAmounts[id]?.trim()?.toDoubleOrNull()
+                            var totalSplitAmount = 0L
 
-                                if (entered == null || entered < 0.0) {
-                                    coroutineScope.launch {
-                                        snackbarHostState.showSnackbar(
-                                            "Enter valid amount for all selected members."
-                                        )
-                                    }
+                            participants.forEach { userId ->
+
+                                val enteredAmount =
+                                    unequalAmounts[userId]
+                                        ?.trim()
+                                        ?.toDoubleOrNull()
+
+                                if (
+                                    enteredAmount == null ||
+                                    enteredAmount <= 0.0
+                                ) {
+
+                                    showError(
+                                        "Enter valid amount for all selected members."
+                                    )
+
                                     return@FloatingActionButton
                                 }
 
-                                map[id] = entered
-                                sum += entered
+                                val amountInPaise =
+                                    (enteredAmount * 100)
+                                        .toLong()
+
+                                splits[userId] =
+                                    amountInPaise / 100.0
+
+                                totalSplitAmount +=
+                                    amountInPaise
                             }
 
-                            val formattedSum =
-                                String.format("%.2f", sum).toDouble()
-                            val formattedTotal =
-                                String.format("%.2f", totalAmount).toDouble()
+                            val totalAmountInPaise =
+                                (formattedTotalAmount * 100)
+                                    .toLong()
 
-                            if (formattedSum != formattedTotal) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        "Total unequal split must equal ₹$formattedTotal"
-                                    )
-                                }
+                            if (
+                                abs(
+                                    totalSplitAmount -
+                                            totalAmountInPaise
+                                ) > 1
+                            ) {
+
+                                showError(
+                                    "Unequal split total must equal ₹$formattedTotalAmount"
+                                )
+
                                 return@FloatingActionButton
                             }
-
-                            map
                         }
 
-                        else -> emptyMap()
+                        else -> {
+
+                            showError(
+                                "Invalid split type."
+                            )
+
+                            return@FloatingActionButton
+                        }
                     }
 
-                    val expense = hashMapOf(
-                        "title" to title.trim(),
-                        "amount" to String.format("%.2f", totalAmount).toDouble(),
-                        "paidBy" to paidBy,
-                        "splitType" to splitType,
-                        "splits" to splits,
-                        "timestamp" to System.currentTimeMillis()
-                    )
+                    val expense =
+                        hashMapOf(
+
+                            "title" to
+                                    title.trim(),
+
+                            "amount" to
+                                    formattedTotalAmount,
+
+                            "paidBy" to
+                                    paidBy,
+
+                            "splitType" to
+                                    splitType,
+
+                            "splits" to
+                                    splits,
+
+                            "participants" to
+                                    participants,
+
+                            "timestamp" to
+                                    Timestamp.now()
+                        )
 
                     isSaving = true
 
@@ -217,60 +485,97 @@ fun AddExpenseScreen(
                         .document(groupId)
                         .collection("expenses")
                         .add(expense)
+
                         .addOnSuccessListener { expenseRef ->
 
-                            val newExpenseId = expenseRef.id
                             val actorName =
                                 userProfileNames[currentUserId]
                                     ?: currentUser?.second
                                     ?: "Someone"
 
-                            val allGroupMemberIds =
-                                groupMembers.map { it.first }.distinct()
+                            val activity =
+                                hashMapOf(
 
-                            val totalAmountInSubunits =
-                                (totalAmount * 100).toLong()
+                                    "type" to
+                                            "EXPENSE_ADDED",
 
-                            val activity = hashMapOf(
-                                "type" to "EXPENSE_ADDED",
-                                "actorId" to currentUserId,
-                                "actorName" to actorName,
-                                "groupId" to groupId,
-                                "groupName" to groupName,
-                                "relatedExpenseId" to newExpenseId,
-                                "relatedExpenseTitle" to title.trim(),
-                                "amount" to totalAmountInSubunits,
-                                "currencyCode" to "INR",
-                                "timestampMillis" to System.currentTimeMillis(),
-                                "participants" to allGroupMemberIds
-                            )
+                                    "actorId" to
+                                            currentUserId,
+
+                                    "actorName" to
+                                            actorName,
+
+                                    "groupId" to
+                                            groupId,
+
+                                    "groupName" to
+                                            groupName,
+
+                                    "relatedExpenseId" to
+                                            expenseRef.id,
+
+                                    "relatedExpenseTitle" to
+                                            title.trim(),
+
+                                    "amount" to
+                                            (formattedTotalAmount * 100).toLong(),
+
+                                    "currencyCode" to
+                                            "INR",
+
+                                    "timestampMillis" to
+                                            System.currentTimeMillis(),
+
+                                    "participants" to
+                                            participants
+                                )
 
                             db.collection("activities")
                                 .add(activity)
+
                                 .addOnCompleteListener {
+
+                                    createExpenseNotifications(
+                                        expenseTitle =
+                                            title.trim(),
+
+                                        totalAmount =
+                                            formattedTotalAmount,
+
+                                        actorName =
+                                            actorName
+                                    )
+
                                     isSaving = false
+
                                     navController.popBackStack()
                                 }
                         }
+
                         .addOnFailureListener {
+
                             isSaving = false
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar(
-                                    "Failed to add expense."
-                                )
-                            }
+
+                            showError(
+                                "Failed to add expense."
+                            )
                         }
                 }
             ) {
+
                 if (isSaving) {
+
                     CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        color =
+                            MaterialTheme.colorScheme.onPrimary
                     )
+
                 } else {
+
                     Icon(
-                        Icons.Filled.Check,
+                        Icons.Default.Check,
                         contentDescription = "Save"
                     )
                 }
@@ -278,97 +583,157 @@ fun AddExpenseScreen(
         },
 
         snackbarHost = {
-            SnackbarHost(hostState = snackbarHostState)
+
+            SnackbarHost(
+                hostState = snackbarHostState
+            )
         }
 
     ) { padding ->
 
         Column(
             modifier = Modifier
+                .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
         ) {
 
             OutlinedTextField(
                 value = title,
-                onValueChange = { title = it },
-                label = { Text("Expense Title") },
+
+                onValueChange = {
+                    title = it
+                },
+
+                label = {
+                    Text("Expense Title")
+                },
+
                 singleLine = true,
+
                 modifier = Modifier.fillMaxWidth(),
+
                 enabled = !isSaving
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(
+                modifier = Modifier.height(12.dp)
+            )
 
             OutlinedTextField(
                 value = amount,
+
                 onValueChange = {
-                    amount = sanitizeDecimalInput(it)
+                    amount =
+                        sanitizeDecimalInput(it)
                 },
-                label = { Text("Total Amount") },
+
+                label = {
+                    Text("Total Amount")
+                },
+
                 singleLine = true,
+
                 modifier = Modifier.fillMaxWidth(),
+
                 enabled = !isSaving,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Decimal
-                )
+
+                keyboardOptions =
+                    KeyboardOptions(
+                        keyboardType =
+                            KeyboardType.Decimal
+                    )
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(
+                modifier = Modifier.height(16.dp)
+            )
 
             val paidByDisplayName =
                 if (paidBy == currentUserId) {
+
                     "Me"
+
                 } else {
+
                     userProfileNames[paidBy]
-                        ?: groupMembers.find { it.first == paidBy }?.second
+                        ?: groupMembers.find {
+                            it.first == paidBy
+                        }?.second
                         ?: "Select"
                 }
 
             ExposedDropdownMenuBox(
+
                 expanded = dropdownExpanded,
+
                 onExpandedChange = {
+
                     if (!isSaving) {
-                        dropdownExpanded = !dropdownExpanded
+
+                        dropdownExpanded =
+                            !dropdownExpanded
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
+                }
             ) {
 
                 OutlinedTextField(
+
                     value = paidByDisplayName,
+
                     onValueChange = {},
+
                     readOnly = true,
-                    label = { Text("Paid By") },
-                    trailingIcon = {
-                        ExposedDropdownMenuDefaults.TrailingIcon(
-                            expanded = dropdownExpanded
-                        )
+
+                    label = {
+                        Text("Paid By")
                     },
+
+                    trailingIcon = {
+
+                        ExposedDropdownMenuDefaults
+                            .TrailingIcon(
+                                expanded =
+                                    dropdownExpanded
+                            )
+                    },
+
                     modifier = Modifier
                         .menuAnchor()
                         .fillMaxWidth(),
+
                     singleLine = true,
+
                     enabled = !isSaving
                 )
 
                 ExposedDropdownMenu(
+
                     expanded = dropdownExpanded,
+
                     onDismissRequest = {
                         dropdownExpanded = false
                     }
                 ) {
 
                     DropdownMenuItem(
-                        text = { Text("Me") },
+
+                        text = {
+                            Text("Me")
+                        },
+
                         onClick = {
+
                             paidBy = currentUserId
                             dropdownExpanded = false
                         }
                     )
 
                     groupMembers
-                        .filter { it.first != currentUserId }
+                        .filter {
+                            it.first != currentUserId
+                        }
+
                         .forEach { member ->
 
                             val profileName =
@@ -376,8 +741,13 @@ fun AddExpenseScreen(
                                     ?: member.second
 
                             DropdownMenuItem(
-                                text = { Text(profileName) },
+
+                                text = {
+                                    Text(profileName)
+                                },
+
                                 onClick = {
+
                                     paidBy = member.first
                                     dropdownExpanded = false
                                 }
@@ -386,76 +756,126 @@ fun AddExpenseScreen(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(
+                modifier = Modifier.height(16.dp)
+            )
 
             Text(
-                "Split Type",
+                text = "Split Type",
                 fontWeight = FontWeight.SemiBold
             )
 
             Row(
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment =
+                    Alignment.CenterVertically
             ) {
 
                 RadioButton(
                     selected = splitType == "equal",
+
                     onClick = {
-                        if (!isSaving) splitType = "equal"
+
+                        if (!isSaving) {
+                            splitType = "equal"
+                        }
                     }
                 )
+
                 Text("Equal")
 
-                Spacer(Modifier.width(16.dp))
+                Spacer(
+                    modifier = Modifier.width(16.dp)
+                )
 
                 RadioButton(
                     selected = splitType == "unequal",
+
                     onClick = {
-                        if (!isSaving) splitType = "unequal"
+
+                        if (!isSaving) {
+                            splitType = "unequal"
+                        }
                     }
                 )
+
                 Text("Unequal")
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(
+                modifier = Modifier.height(16.dp)
+            )
 
             Text(
-                "Select Members Involved",
+                text = "Select Members Involved",
                 fontWeight = FontWeight.SemiBold
             )
 
+            Spacer(
+                modifier = Modifier.height(8.dp)
+            )
+
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement =
+                    Arrangement.spacedBy(8.dp)
             ) {
 
-                items(groupMembers) { (id, defaultName, email) ->
+                items(
+                    items = groupMembers,
+                    key = { it.first }
+                ) { (id, defaultName, email) ->
 
                     val profileName =
-                        userProfileNames[id] ?: defaultName
+                        userProfileNames[id]
+                            ?: defaultName
 
                     val isChecked =
                         selectedMembers.contains(id)
 
                     val total =
-                        amount.toDoubleOrNull() ?: 0.0
+                        amount.toDoubleOrNull()
+                            ?: 0.0
 
                     val perPerson =
                         if (
                             splitType == "equal" &&
                             selectedMembers.isNotEmpty()
                         ) {
-                            total / selectedMembers.distinct().size
-                        } else null
+
+                            val totalInPaise =
+                                (total * 100).toLong()
+
+                            val count =
+                                selectedMembers
+                                    .distinct()
+                                    .size
+
+                            val baseShare =
+                                totalInPaise / count
+
+                            baseShare / 100.0
+
+                        } else {
+
+                            null
+                        }
 
                     Card(
+
                         shape = RoundedCornerShape(12.dp),
+
                         colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFF4F6FA)
+                            containerColor =
+                                Color(0xFFF4F6FA)
                         ),
+
                         modifier = Modifier
                             .fillMaxWidth()
+
                             .toggleable(
                                 value = isChecked,
+
                                 enabled = !isSaving,
+
                                 onValueChange = {
                                     toggleMember(id, it)
                                 }
@@ -465,35 +885,55 @@ fun AddExpenseScreen(
                         Column {
 
                             Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier =
+                                    Modifier.padding(12.dp),
+
+                                verticalAlignment =
+                                    Alignment.CenterVertically
                             ) {
 
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
+
                                         .clip(CircleShape)
-                                        .background(Color(0xFF2C5A8C)),
-                                    contentAlignment = Alignment.Center
+
+                                        .background(
+                                            Color(0xFF2C5A8C)
+                                        ),
+
+                                    contentAlignment =
+                                        Alignment.Center
                                 ) {
+
                                     Text(
-                                        text = profileName.first().toString(),
+                                        text =
+                                            profileName
+                                                .firstOrNull()
+                                                ?.uppercase()
+                                                ?: "?",
+
                                         color = Color.White
                                     )
                                 }
 
-                                Spacer(Modifier.width(12.dp))
+                                Spacer(
+                                    modifier = Modifier.width(12.dp)
+                                )
 
                                 Column(
-                                    modifier = Modifier.weight(1f)
+                                    modifier =
+                                        Modifier.weight(1f)
                                 ) {
+
                                     Text(
-                                        profileName,
-                                        fontWeight = FontWeight.Bold
+                                        text = profileName,
+                                        fontWeight =
+                                            FontWeight.Bold
                                     )
 
                                     Text(
-                                        email,
+                                        text = email,
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
@@ -510,10 +950,17 @@ fun AddExpenseScreen(
                                 isChecked &&
                                 perPerson != null
                             ) {
+
                                 Text(
-                                    text = "₹ %.2f will be split".format(perPerson),
+                                    text =
+                                        "₹ %.2f share"
+                                            .format(perPerson),
+
                                     fontSize = 13.sp,
-                                    color = Color(0xFF2C5A8C),
+
+                                    color =
+                                        Color(0xFF2C5A8C),
+
                                     modifier = Modifier.padding(
                                         start = 60.dp,
                                         bottom = 8.dp
@@ -525,22 +972,39 @@ fun AddExpenseScreen(
                                 splitType == "unequal" &&
                                 isChecked
                             ) {
+
                                 OutlinedTextField(
-                                    value = unequalAmounts[id] ?: "",
+
+                                    value =
+                                        unequalAmounts[id]
+                                            ?: "",
+
                                     onValueChange = {
+
                                         unequalAmounts[id] =
                                             sanitizeDecimalInput(it)
                                     },
+
                                     label = {
-                                        Text("₹ Amount for $profileName")
+
+                                        Text(
+                                            "₹ Amount for $profileName"
+                                        )
                                     },
+
                                     singleLine = true,
+
                                     enabled = !isSaving,
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Decimal
-                                    ),
+
+                                    keyboardOptions =
+                                        KeyboardOptions(
+                                            keyboardType =
+                                                KeyboardType.Decimal
+                                        ),
+
                                     modifier = Modifier
                                         .fillMaxWidth()
+
                                         .padding(
                                             horizontal = 16.dp,
                                             vertical = 8.dp

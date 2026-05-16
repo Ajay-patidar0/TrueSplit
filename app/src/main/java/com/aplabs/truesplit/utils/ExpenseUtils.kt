@@ -1,166 +1,399 @@
 package com.aplabs.truesplit.utils
 
+import kotlin.math.abs
+import kotlin.math.round
+
+data class SimplifiedSettlement(
+    val fromUserId: String,
+    val toUserId: String,
+    val amount: Double
+)
+
 object ExpenseUtils {
 
     /**
-     * Calculate net balances for all group members based on all transactions.
-     * @param members List of member maps, each containing an "id" key.
-     * @param transactions List of expense/settlement transactions.
-     * @return Map of user ID → net balance (positive = user is owed, negative = user owes).
+     * OLD BUG:
+     *
+     * You were calculating ONLY FINAL NET BALANCES.
+     *
+     * Example:
+     *
+     * Aditya paid → Ajay owes Aditya ₹333
+     * Ajay paid → Aditya owes Ajay ₹666
+     *
+     * Netting logic converted this into:
+     * Aditya owes Ajay ₹333
+     *
+     * BUT User1 separately still owes BOTH people.
+     *
+     * Real apps like Splitwise preserve pairwise relationships.
+     *
+     * This implementation fixes that.
      */
+
     fun calculateBalances(
         members: List<Map<String, String>>,
         transactions: List<Map<String, Any>>
     ): Map<String, Double> {
+
         val balances = mutableMapOf<String, Double>()
-        // Initialize all members' balances to 0
+
         members.forEach { member ->
-            val id = member["id"] ?: return@forEach
+
+            val id =
+                member["id"] ?: return@forEach
+
             balances[id] = 0.0
         }
 
-        transactions.forEach { tx ->
-            val amount = (tx["amount"] as? Number)?.toDouble() ?: 0.0
-            if (amount <= 0.0) return@forEach
+        val settlements =
+            buildPairwiseSettlements(transactions)
 
-            val type = tx["type"] as? String ?: "expense"
+        settlements.forEach { settlement ->
 
-            if (type == "settle") {
-                val paidBy = tx["paidBy"] as? String
-                val receivedBy = tx["receivedBy"] as? String
-                if (paidBy != null && receivedBy != null &&
-                    balances.containsKey(paidBy) && balances.containsKey(receivedBy)
-                ) {
-                    balances[paidBy] = balances.getValue(paidBy) + amount
-                    balances[receivedBy] = balances.getValue(receivedBy) - amount
-                }
-            } else { // expense
-                val paidBy = tx["paidBy"] as? String ?: return@forEach
-                if (!balances.containsKey(paidBy)) return@forEach
+            balances[settlement.fromUserId] =
+                balances.getOrDefault(
+                    settlement.fromUserId,
+                    0.0
+                ) - settlement.amount
 
-                // Use the robust share computation (supports splits, splitBetween, splitWith)
-                val shares = computeSharesForTransaction(tx)
-
-                if (shares.isEmpty()) {
-                    // No participants selected: treat as personal expense – no net balance change.
-                    // (The payer pays for themselves only.)
-                    return@forEach
-                }
-
-                // Debit each participant by their share
-                shares.forEach { (userId, share) ->
-                    if (balances.containsKey(userId)) {
-                        balances[userId] = balances.getValue(userId) - share
-                    }
-                }
-                // Credit the payer with the full amount
-                balances[paidBy] = balances.getValue(paidBy) + amount
-            }
+            balances[settlement.toUserId] =
+                balances.getOrDefault(
+                    settlement.toUserId,
+                    0.0
+                ) + settlement.amount
         }
 
-        return balances
+        return balances.mapValues { (_, value) ->
+
+            val rounded =
+                round(value * 100) / 100.0
+
+            if (abs(rounded) < 0.01) {
+                0.0
+            } else {
+                rounded
+            }
+        }
     }
 
     /**
-     * Parse split information from an expense transaction.
-     * Supports:
-     * - "splits": Map<userId, Number|Boolean>
-     * - "splitBetween": List<userId>
-     * - "splitWith": List<Map<String, Any>> containing "userId" and optional "amount"/"included"
+     * IMPORTANT:
      *
-     * @return Map of user ID → share amount (already scaled to match the total expense amount).
+     * We NO LONGER simplify using net balances.
+     *
+     * Instead we preserve REAL PERSON-TO-PERSON debts.
+     *
+     * Example:
+     * User1 owes Aditya ₹333
+     * User1 owes Ajay ₹666
+     *
+     * BOTH entries remain.
      */
-    private fun computeSharesForTransaction(tx: Map<String, Any>): Map<String, Double> {
-        val amount = (tx["amount"] as? Number)?.toDouble() ?: 0.0
-        if (amount <= 0.0) return emptyMap()
+    fun simplifyDebts(
+        balances: Map<String, Double>
+    ): List<SimplifiedSettlement> {
 
-        // 1) splits map (key = userId, value = Number or Boolean)
-        val splitsRaw = tx["splits"]
-        if (splitsRaw is Map<*, *>) {
-            // Try numeric amounts first
-            val numericEntries = splitsRaw.entries.mapNotNull { (k, v) ->
-                val userId = k as? String ?: return@mapNotNull null
-                when (v) {
-                    is Number -> userId to v.toDouble()
-                    is String -> v.toDoubleOrNull()?.let { userId to it }
-                    is Boolean -> if (v) userId to 1.0 else null
-                    else -> null
-                }
+        // DO NOT USE THIS ANYMORE.
+        // Returning empty intentionally.
+
+        return emptyList()
+    }
+
+    /**
+     * THIS IS THE REAL FIX.
+     *
+     * Build actual pairwise debts directly from transactions.
+     */
+    fun buildPairwiseSettlements(
+        transactions: List<Map<String, Any>>
+    ): List<SimplifiedSettlement> {
+
+        val pairwiseDebts =
+            mutableMapOf<String, Double>()
+
+        transactions.forEach { tx ->
+
+            val type =
+                tx["type"] as? String ?: "expense"
+
+            val totalAmount =
+                (tx["amount"] as? Number)
+                    ?.toDouble()
+                    ?: return@forEach
+
+            if (totalAmount <= 0.0) {
+                return@forEach
             }
-            if (numericEntries.isNotEmpty()) {
-                val asMap = numericEntries.toMap()
-                val sum = asMap.values.sum()
-                return if (sum > 0.0) {
-                    val scale = amount / sum
-                    asMap.mapValues { (_, v) -> v * scale }
-                } else {
-                    // All zeros → equal split among "true" flags
-                    val included = numericEntries.filter { it.second > 0 }.map { it.first }
-                    if (included.isNotEmpty()) {
-                        val share = amount / included.size
-                        included.associateWith { share }
-                    } else emptyMap()
+
+            when (type) {
+
+                // =====================================
+                // NORMAL EXPENSE
+                // =====================================
+
+                "expense" -> {
+
+                    val paidBy =
+                        tx["paidBy"] as? String
+                            ?: return@forEach
+
+                    val shares =
+                        computeShares(
+                            tx = tx,
+                            totalAmount = totalAmount
+                        )
+
+                    shares.forEach { (userId, shareAmount) ->
+
+                        // Skip self debt
+                        if (userId == paidBy) {
+                            return@forEach
+                        }
+
+                        addDebt(
+                            pairwiseDebts = pairwiseDebts,
+                            debtorId = userId,
+                            creditorId = paidBy,
+                            amount = shareAmount
+                        )
+                    }
                 }
-            } else {
-                // Boolean-only map: take all `true` as participants
-                val participants = splitsRaw.entries.mapNotNull { (k, v) ->
-                    if (v == true) k as? String else null
-                }
-                if (participants.isNotEmpty()) {
-                    val share = amount / participants.size
-                    return participants.associateWith { share }
+
+                // =====================================
+                // SETTLEMENT PAYMENT
+                // =====================================
+
+                "settle" -> {
+
+                    val paidBy =
+                        tx["paidBy"] as? String
+                            ?: return@forEach
+
+                    val receivedBy =
+                        tx["receivedBy"] as? String
+                            ?: return@forEach
+
+                    reduceDebt(
+                        pairwiseDebts = pairwiseDebts,
+                        debtorId = paidBy,
+                        creditorId = receivedBy,
+                        amount = totalAmount
+                    )
                 }
             }
         }
 
-        // 2) splitBetween: List<userId>
-        val splitBetween = tx["splitBetween"]
+        return pairwiseDebts
+            .mapNotNull { (key, amount) ->
+
+                if (amount <= 0.01) {
+                    return@mapNotNull null
+                }
+
+                val parts = key.split("_")
+
+                if (parts.size != 2) {
+                    return@mapNotNull null
+                }
+
+                SimplifiedSettlement(
+                    fromUserId = parts[0],
+                    toUserId = parts[1],
+                    amount = round(amount * 100) / 100.0
+                )
+            }
+    }
+
+    private fun addDebt(
+        pairwiseDebts: MutableMap<String, Double>,
+        debtorId: String,
+        creditorId: String,
+        amount: Double
+    ) {
+
+        if (amount <= 0.0) {
+            return
+        }
+
+        val directKey =
+            "${debtorId}_${creditorId}"
+
+        val reverseKey =
+            "${creditorId}_${debtorId}"
+
+        val reverseDebt =
+            pairwiseDebts[reverseKey] ?: 0.0
+
+        // OFFSET OPPOSITE DIRECTION DEBT
+        if (reverseDebt > 0.0) {
+
+            if (reverseDebt > amount) {
+
+                pairwiseDebts[reverseKey] =
+                    round((reverseDebt - amount) * 100) / 100.0
+
+                return
+            }
+
+            pairwiseDebts.remove(reverseKey)
+
+            val remaining =
+                amount - reverseDebt
+
+            if (remaining > 0.01) {
+
+                pairwiseDebts[directKey] =
+                    round(
+                        (
+                                pairwiseDebts.getOrDefault(
+                                    directKey,
+                                    0.0
+                                ) + remaining
+                                ) * 100
+                    ) / 100.0
+            }
+
+            return
+        }
+
+        pairwiseDebts[directKey] =
+            round(
+                (
+                        pairwiseDebts.getOrDefault(
+                            directKey,
+                            0.0
+                        ) + amount
+                        ) * 100
+            ) / 100.0
+    }
+
+    private fun reduceDebt(
+        pairwiseDebts: MutableMap<String, Double>,
+        debtorId: String,
+        creditorId: String,
+        amount: Double
+    ) {
+
+        val key =
+            "${debtorId}_${creditorId}"
+
+        val existing =
+            pairwiseDebts[key] ?: return
+
+        val updated =
+            round((existing - amount) * 100) / 100.0
+
+        if (updated <= 0.01) {
+            pairwiseDebts.remove(key)
+        } else {
+            pairwiseDebts[key] = updated
+        }
+    }
+
+    private fun computeShares(
+        tx: Map<String, Any>,
+        totalAmount: Double
+    ): Map<String, Double> {
+
+        val splits =
+            tx["splits"]
+
+        // =====================================
+        // CUSTOM SPLITS
+        // =====================================
+
+        if (splits is Map<*, *>) {
+
+            val cleaned =
+                mutableMapOf<String, Double>()
+
+            splits.forEach { (key, value) ->
+
+                val userId =
+                    key as? String
+                        ?: return@forEach
+
+                val amount =
+                    when (value) {
+
+                        is Number -> value.toDouble()
+
+                        is String -> value.toDoubleOrNull()
+
+                        else -> null
+                    }
+
+                if (
+                    amount != null &&
+                    amount >= 0.0
+                ) {
+                    cleaned[userId] = amount
+                }
+            }
+
+            if (cleaned.isNotEmpty()) {
+                return cleaned
+            }
+        }
+
+        // =====================================
+        // splitBetween
+        // =====================================
+
+        val splitBetween =
+            tx["splitBetween"]
+
         if (splitBetween is List<*>) {
-            val participants = splitBetween.mapNotNull { it as? String }
-            if (participants.isNotEmpty()) {
-                val share = amount / participants.size
-                return participants.associateWith { share }
+
+            val users =
+                splitBetween
+                    .mapNotNull {
+                        it as? String
+                    }
+                    .distinct()
+
+            if (users.isNotEmpty()) {
+
+                val share =
+                    totalAmount / users.size
+
+                return users.associateWith {
+                    round(share * 100) / 100.0
+                }
             }
         }
 
-        // 3) splitWith: List<Map<...>>
-        val splitWith = tx["splitWith"]
+        // =====================================
+        // splitWith
+        // =====================================
+
+        val splitWith =
+            tx["splitWith"]
+
         if (splitWith is List<*>) {
-            val entries = splitWith.mapNotNull { it as? Map<*, *> }
-            // Try explicit amounts first
-            val explicit = entries.mapNotNull { m ->
-                val uid = m["userId"] as? String ?: return@mapNotNull null
-                when (val v = m["amount"]) {
-                    is Number -> uid to v.toDouble()
-                    is String -> v.toDoubleOrNull()?.let { uid to it }
-                    else -> null
+
+            val users =
+                splitWith.mapNotNull {
+
+                    val map =
+                        it as? Map<*, *>
+                            ?: return@mapNotNull null
+
+                    map["userId"] as? String
+                }.distinct()
+
+            if (users.isNotEmpty()) {
+
+                val share =
+                    totalAmount / users.size
+
+                return users.associateWith {
+                    round(share * 100) / 100.0
                 }
-            }
-            if (explicit.isNotEmpty()) {
-                val sum = explicit.sumOf { it.second }
-                return if (sum > 0) {
-                    val scale = amount / sum
-                    explicit.associate { it.first to it.second * scale }
-                } else emptyMap()
-            }
-            // Fallback to inclusion flags
-            val participants = entries.mapNotNull { m ->
-                val uid = m["userId"] as? String ?: return@mapNotNull null
-                val included = when (val inc = m["included"]) {
-                    is Boolean -> inc
-                    is Number -> inc.toInt() != 0
-                    is String -> inc.equals("true", true) || inc == "1"
-                    else -> true // presence implies included
-                }
-                if (included) uid else null
-            }
-            if (participants.isNotEmpty()) {
-                val share = amount / participants.size
-                return participants.associateWith { share }
             }
         }
 
-        // No participants defined → treat as personal expense (no one else owes anything)
         return emptyMap()
     }
 }
